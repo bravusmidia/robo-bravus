@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.5.0"
+VERSAO = "1.6.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -56,9 +56,11 @@ DEFAULTS = {
     "ia_chave_anthropic": "",
     "ia_modelo": "claude-haiku-5-5",
     "ia_chave_gemini": "",
-    "ia_modelo_gemini": "gemini-flash-latest",
+    "ia_modelo_gemini": "gemini-flash-lite-latest",
     "atualizacao_automatica": True,
     "url_atualizacao": "https://raw.githubusercontent.com/bravusmidia/robo-bravus/main/",
+    "fuso_horario": -3,
+    "relogio_fixo": False,
     "primeira_vez": True,
     "ultima_saudacao": "",
 }
@@ -73,6 +75,7 @@ def load_config():
         pass
     except Exception as e:
         log.warning("config invalida: %s", e)
+    load_config.cache = cfg
     return cfg
 
 
@@ -90,8 +93,48 @@ def norm(s):
     return re.sub(r"\s+", " ", s).strip()
 
 
+# Relogio: hora real puxada da internet (corrige o relogio do PC se estiver errado)
+_RELOGIO = {"offset": 0.0, "sync": False}
+
+
+def sync_relogio():
+    """Pega a hora certa do servidor do Google (cabecalho Date) e guarda a diferenca para o relogio do PC."""
+    import email.utils, urllib.request
+    for url in ("https://www.google.com", "https://www.cloudflare.com", "http://www.google.com"):
+        try:
+            t0 = time.time()
+            try:
+                req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "RoboBravus"})
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    d = r.headers.get("Date")
+            except Exception:
+                curl = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "curl.exe")
+                if not os.path.exists(curl):
+                    raise
+                out = subprocess.run([curl, "-sI", "-m", "8", url], capture_output=True, text=True,
+                                     creationflags=0x08000000).stdout
+                d = next((l.split(":", 1)[1].strip() for l in out.splitlines() if l.lower().startswith("date:")), None)
+            if not d:
+                continue
+            real = email.utils.parsedate_to_datetime(d).timestamp() + (time.time() - t0) / 2
+            _RELOGIO["offset"] = real - time.time()
+            _RELOGIO["sync"] = True
+            log.info("relogio sincronizado pela internet (diferenca do PC: %.0f s)", _RELOGIO["offset"])
+            return True
+        except Exception as e:
+            log.info("relogio %s: %s", url, e)
+    return False
+
+
+def agora():
+    """Hora oficial do robo: hora da internet no fuso de Fortaleza/Brasilia (UTC-3)."""
+    fuso = float(load_config.cache.get("fuso_horario", -3)) if hasattr(load_config, "cache") else -3.0
+    tz = datetime.timezone(datetime.timedelta(hours=fuso))
+    return datetime.datetime.fromtimestamp(time.time() + _RELOGIO["offset"], tz).replace(tzinfo=None)
+
+
 def periodo(h=None):
-    h = datetime.datetime.now().hour if h is None else h
+    h = agora().hour if h is None else h
     if 5 <= h < 12:
         return "Bom dia"
     if 12 <= h < 18:
@@ -274,7 +317,7 @@ class Brain:
         n = norm(text).strip(" .,!?")
         nome = self.cfg["nome_usuario"]
         robo = self.cfg["nome_robo"]
-        now = datetime.datetime.now()
+        now = agora()
 
         def has(*ws):
             return any(re.search(r"\b" + re.escape(w) + r"\b", n) for w in ws)
@@ -312,11 +355,19 @@ class Brain:
             return r(f"Pronto, {nome}! Lembrete de água ligado.", "happy", water=True)
 
         # Horas / data
-        if has("que horas", "que hora", "horas sao", "hora e agora"):
-            return r(f"Agora são {now.hour} horas e {now.minute:02d} minutos, {nome}.")
+        if has("que horas", "que hora", "horas sao", "hora e agora", "hora", "horas", "relogio", "mostra a hora"):
+            return r(f"Agora são {now.hour} horas e {now.minute:02d} minutos, {nome}.", "clock", clock=True)
         if has("que dia", "data de hoje", "dia e hoje", "que data"):
-            return r(f"Hoje é {DIAS[now.weekday()]}, {now.day} de {MESES[now.month - 1]} de {now.year}, {nome}.")
+            return r(f"Hoje é {DIAS[now.weekday()]}, {now.day} de {MESES[now.month - 1]} de {now.year}, {nome}.", "clock", clock=True)
 
+        # Atualizar o proprio robo por voz
+        if (has("se atualiza", "se atualizar", "atualiza voce", "atualize voce", "atualiza o robo", "atualizar o robo",
+                "procura atualizacao", "procurar atualizacao", "busca atualizacao", "tem atualizacao",
+                "nova versao", "atualiza ai", "atualize se", "atualize-se", "se atualize")
+                and "pagina" not in n):
+            return r(f"Certo, {nome}! Vou procurar uma versão nova agora.", "think", update=True)
+        if has("qual sua versao", "qual a sua versao", "que versao", "versao voce"):
+            return r(f"Estou na versão {VERSAO}, {nome}.", "present")
         # Confirmacoes pendentes (ex.: desligar o PC)
         # ---- Comandos no computador ----
         abrir = has("abre", "abrir", "abra", "abri", "entra no", "entrar no", "inicia", "executa")
@@ -495,11 +546,11 @@ class AIWorker(QObject):
 
     def system_prompt(self):
         nome, robo = self.cfg["nome_usuario"], self.cfg["nome_robo"]
-        agora = datetime.datetime.now()
+        agr = agora()
         return (f"Você é o {robo}, um robozinho assistente com jeito de menino, simpático e educado, que flutua "
                 f"na tela do computador de {nome}, CEO da agência Bravus Mídia (marketing digital, tráfego pago, "
-                f"sites, landing pages, automações e mentoria). Hoje é {DIAS[agora.weekday()]}, "
-                f"{agora.day}/{agora.month}/{agora.year}, {agora.hour}h{agora.minute:02d}. "
+                f"sites, landing pages, automações e mentoria). Hoje é {DIAS[agr.weekday()]}, "
+                f"{agr.day}/{agr.month}/{agr.year}, {agr.hour}h{agr.minute:02d}. "
                 f"Responda a qualquer pergunta, sobre qualquer assunto, sempre em português do Brasil, e chame-o de {nome}. "
                 f"Seja direto: no máximo 3 frases curtas, porque a resposta será falada em voz alta. "
                 f"Não use emojis, listas, asteriscos nem markdown. "
@@ -507,35 +558,60 @@ class AIWorker(QObject):
                 f"responda curto e coloque no final UMA destas marcações: [SITE:https://endereco] para abrir um site, "
                 f"[PESQUISAR:termo] para pesquisar no Google ou [YOUTUBE:termo] para procurar no YouTube.")
 
+    # modos para responder rapido (sem "pensar" demais); o primeiro que o modelo aceitar fica salvo
+    RAPIDO = [{"thinkingConfig": {"thinkingBudget": 0}}, {"thinkingConfig": {"thinkingLevel": "minimal"}},
+              {"thinkingConfig": {"thinkingLevel": "low"}}, {}]
+
     def _gemini(self, text):
         key = self.cfg["ia_chave_gemini"].strip()
         contents = []
         for q, a in self.history[-6:]:
             contents += [{"role": "user", "parts": [{"text": q}]}, {"role": "model", "parts": [{"text": a}]}]
         contents.append({"role": "user", "parts": [{"text": text}]})
-        body = {"system_instruction": {"parts": [{"text": self.system_prompt()}]}, "contents": contents,
-                "generationConfig": {"maxOutputTokens": 400, "temperature": 0.8}}
         base = "https://generativelanguage.googleapis.com/v1beta/"
         hdr = {"x-goog-api-key": key}
-        model = self.cfg.get("ia_modelo_gemini") or "gemini-flash-latest"
-        try:
-            data = http_json(f"{base}models/{model}:generateContent", body, hdr)
-        except RuntimeError as e:
-            if "404" not in str(e) and "not found" not in str(e).lower():
+        model = self.cfg.get("ia_modelo_gemini") or "gemini-flash-lite-latest"
+        if model == "gemini-flash-latest":      # versoes antigas usavam o modelo mais lento
+            model = "gemini-flash-lite-latest"
+
+        def call(model, modo):
+            gen = {"maxOutputTokens": 300, "temperature": 0.7}
+            gen.update(self.RAPIDO[modo])
+            body = {"system_instruction": {"parts": [{"text": self.system_prompt()}]}, "contents": contents,
+                    "generationConfig": gen}
+            return http_json(f"{base}models/{model}:generateContent", body, hdr, timeout=25)
+
+        modo = int(self.cfg.get("ia_modo_rapido", 0))
+        tentativas = 0
+        while True:
+            try:
+                data = call(model, modo)
+                break
+            except RuntimeError as e:
+                msg = str(e).lower()
+                tentativas += 1
+                if tentativas > 6:
+                    raise
+                if ("404" in msg or "not found" in msg):
+                    lst = http_json(f"{base}models?pageSize=200", None, hdr).get("models", [])
+                    ok = [m["name"].split("/")[-1] for m in lst
+                          if "generateContent" in m.get("supportedGenerationMethods", [])
+                          and "flash" in m["name"] and not any(x in m["name"] for x in ("live", "tts", "image", "audio", "embedding"))]
+                    if not ok:
+                        raise
+                    # prefere "flash-lite" (mais rapido), estavel e mais novo
+                    ok.sort(key=lambda n: ("lite" not in n, "preview" in n or "exp" in n,
+                                           [-int(x) for x in re.findall(r"\d+", n)[:2]]))
+                    model = ok[0]
+                    continue
+                if "400" in msg and ("thinking" in msg or "invalid json" in msg or "unknown name" in msg) and modo < len(self.RAPIDO) - 1:
+                    modo += 1
+                    continue
                 raise
-            # modelo saiu do ar: escolhe sozinho um modelo "flash" disponivel na conta
-            lst = http_json(f"{base}models?pageSize=200", None, hdr).get("models", [])
-            ok = [m["name"].split("/")[-1] for m in lst
-                  if "generateContent" in m.get("supportedGenerationMethods", [])
-                  and "flash" in m["name"] and not any(x in m["name"] for x in ("live", "tts", "image", "audio", "embedding"))]
-            if not ok:
-                raise
-            ok.sort(key=lambda n: ("preview" in n or "exp" in n, [-int(x) for x in re.findall(r"\d+", n)[:2]]))
-            model = ok[0]
-            self.cfg["ia_modelo_gemini"] = model; save_config(self.cfg)
-            data = http_json(f"{base}models/{model}:generateContent", body, hdr)
+        if self.cfg.get("ia_modelo_gemini") != model or self.cfg.get("ia_modo_rapido") != modo:
+            self.cfg["ia_modelo_gemini"] = model; self.cfg["ia_modo_rapido"] = modo; save_config(self.cfg)
         parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
-        return "".join(p.get("text", "") for p in parts).strip()
+        return "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
 
     def _anthropic(self, text):
         msgs = []
@@ -564,7 +640,8 @@ class AIWorker(QObject):
             elif "400" in msg or "401" in msg or "403" in msg or "API key" in msg:
                 self.answered.emit(f"{nome}, a chave da inteligência artificial parece inválida. Confere no menu, em Configurar IA.")
             else:
-                self.answered.emit(f"Desculpa, {nome}, não consegui acessar a inteligência artificial agora.")
+                motivo = "demorou demais" if "timed out" in msg.lower() or "timeout" in msg.lower() else "sem conexão com a IA"
+                self.answered.emit(f"Desculpa, {nome}, não consegui responder agora: {motivo}. Tenta de novo?")
 
 
 # ----------------------------------------------------------------------------
@@ -572,9 +649,11 @@ class AIWorker(QObject):
 # ----------------------------------------------------------------------------
 # estilo: (voz do Edge, tom, velocidade, efeito)   efeito: None | "metal" | "metal_forte"
 # estilo: (voz online do Edge, tom, velocidade, efeito, aceleracao da voz do Windows)
+# estilo: (voz online, tom, velocidade, efeito, aceleracao online, aceleracao da voz do Windows)
+# Menino: voz masculina com a voz "encolhida" (aceleracao) -> timbre de crianca, e metal bem leve.
 VOZ_ESTILOS = {
-    "menino": ("pt-BR-ThalitaNeural", "-6Hz", "+8%", "metal", 1.28),   # robo menino (padrao)
-    "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None, 1.0),       # voz natural
+    "menino": ("pt-BR-AntonioNeural", "+18Hz", "-10%", "metal_leve", 1.2, 1.25),
+    "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None, 1.0, 1.0),
 }
 
 
@@ -595,7 +674,9 @@ def process_voice(x, rate, effect, speed, out_path):
         x = y
     out = x
     if effect:
-        if effect == "metal_forte":
+        if effect == "metal_leve":
+            taps, fb_d, fb = ((0.0023, 0.16),), 0.004, 0.08
+        elif effect == "metal_forte":
             taps, fb_d, fb = ((0.0031, 0.55), (0.0069, 0.4), (0.0113, 0.25)), 0.0045, 0.5
         else:
             taps, fb_d, fb = ((0.0029, 0.35), (0.0061, 0.2)), 0.0052, 0.28
@@ -719,7 +800,7 @@ class Voice(QObject):
                 path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}.mp3")
 
                 async def go():
-                    voz, tom, vel, _, _ = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
+                    voz, tom, vel, _, _, _ = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
                     ultimo = None
                     # se a voz escolhida nao existir mais no servidor, tenta as parecidas
                     for v in dict.fromkeys([voz, voz.replace("Neural", "MultilingualNeural"),
@@ -734,11 +815,12 @@ class Voice(QObject):
 
                 asyncio.run(go())
                 if os.path.exists(path) and os.path.getsize(path) > 0:
-                    efeito = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])[3]
+                    est = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
+                    efeito, acel = est[3], est[4]
                     log.info("voz: online (%s)", self.cfg.get("efeito_voz"))
-                    if efeito:
+                    if efeito or acel != 1.0:
                         try:
-                            path = robotize_mp3(path, efeito)
+                            path = robotize_mp3(path, efeito, acel)
                         except Exception as e:
                             log.info("efeito robo indisponivel: %s", e)
                     self._file_ready.emit(rid, path)
@@ -759,7 +841,7 @@ class Voice(QObject):
             eng.setProperty("rate", 175)
             if rid != self.req:
                 return
-            _, _, _, efeito, speed = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
+            _, _, _, efeito, _, speed = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
             if self.player is not None and not getattr(self, "_player_broken", False):
                 try:   # grava, transforma em voz de menino e toca no player
                     wav = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}.wav")
@@ -896,7 +978,7 @@ class Listener(QObject):
                     silence = 0; voiced += 1
                 else:
                     silence += 1
-                if silence > 28 or len(frames) > 400:
+                if silence > 20 or len(frames) > 400:
                     break
         if voiced < 8:
             return None
@@ -1059,7 +1141,7 @@ class Updater(QObject):
 # Atalhos: teclas globais e comandos vindos dos atalhos da Area de Trabalho
 # ----------------------------------------------------------------------------
 PORTA = 47851
-TECLAS = {1: ("B", "alternar"), 2: ("F", "falar"), 3: ("M", "mudo")}  # Ctrl + Alt + tecla
+TECLAS = {1: ("B", "alternar"), 2: ("F", "falar"), 3: ("M", "mudo"), 4: ("U", "atualizar")}  # Ctrl + Alt + tecla
 
 
 class Control(QObject):
@@ -1609,10 +1691,50 @@ class SpriteRobot(RobotModel):
                 p.save(); p.translate(self.HAND_R.x() + 5, self.HAND_R.y() - 30); p.scale(3.2, 3.2)
                 self.draw_cup(p, P(0, 0)); p.restore()
             self.blit(p, "armR")
+            if "clock" in self.fx:
+                self.draw_holo_clock(p)
             p.restore()
         p.restore()
         if not head_only:
             self.draw_fx_sprite(p)
+
+    def draw_holo_clock(self, p):
+        """Relogio holografico flutuando sobre a palma da mao direita."""
+        t = self.t
+        hx, hy = 520, 120 + math.sin(t * 2.2) * 6
+        w, h = 340, 175
+        rect = QRectF(hx - w / 2, hy - h / 2, w, h)
+        # feixe de luz saindo da mao
+        beam = QPainterPath()
+        beam.moveTo(518, 292); beam.lineTo(rect.left() + 30, rect.bottom()); beam.lineTo(rect.right() - 30, rect.bottom())
+        beam.lineTo(548, 292); beam.closeSubpath()
+        g = QLinearGradient(0, 292, 0, rect.bottom())
+        g.setColorAt(0, QColor(0, 190, 255, 140)); g.setColorAt(1, QColor(0, 190, 255, 15))
+        p.setPen(Qt.NoPen); p.setBrush(g); p.drawPath(beam)
+        panel = QPainterPath(); panel.addRoundedRect(rect, 22, 22)
+        p.setBrush(QColor(4, 20, 40, 170)); p.drawPath(panel)
+        self.glow_path(p, panel, GLOW, fill=False, width=4, strength=1.1)
+        # linhas de holograma
+        p.save(); p.setClipPath(panel)
+        off = (t * 30) % 8
+        p.setPen(QPen(QColor(0, 200, 255, 28), 2))
+        y = rect.top() + off
+        while y < rect.bottom():
+            p.drawLine(P(rect.left(), y), P(rect.right(), y)); y += 8
+        p.restore()
+        hora = getattr(self, "clock_text", "--:--")
+        if int(t * 2) % 2 == 1:
+            hora = hora.replace(":", " ")
+        f = QFont("Segoe UI"); f.setBold(True); f.setPixelSize(100)
+        p.setFont(f)
+        for wdt, a in ((8, 40), (4, 80)):
+            p.setPen(QPen(QColor(0, 180, 255, a), wdt))
+            p.drawText(QRectF(rect.left(), rect.top() + 6, w, 115), Qt.AlignCenter, hora)
+        p.setPen(QColor(210, 245, 255))
+        p.drawText(QRectF(rect.left(), rect.top() + 6, w, 115), Qt.AlignCenter, hora)
+        f2 = QFont("Segoe UI"); f2.setPixelSize(36); f2.setBold(True)
+        p.setFont(f2); p.setPen(QColor(120, 210, 255))
+        p.drawText(QRectF(rect.left(), rect.top() + 116, w, 50), Qt.AlignCenter, getattr(self, "date_text", ""))
 
     def draw_fx_sprite(self, p):
         t = self.t
@@ -1711,7 +1833,11 @@ class RobotWindow(QWidget):
         self.updater.done.connect(self.on_update)
         self._manual_update = False
         self.upd_timer = QTimer(self); self.upd_timer.timeout.connect(self.auto_update)
-        self.upd_timer.start(3 * 3600 * 1000)
+        self.upd_timer.start(3600 * 1000)   # procura sozinho a cada 1 hora
+        threading.Thread(target=sync_relogio, daemon=True).start()
+        self.sync_timer = QTimer(self)
+        self.sync_timer.timeout.connect(lambda: threading.Thread(target=sync_relogio, daemon=True).start())
+        self.sync_timer.start(3600 * 1000)
         QTimer.singleShot(45000, self.auto_update)
         if sys.platform == "win32" and self.cfg.get("atalhos_versao") != VERSAO:
             def _atalhos():
@@ -1799,7 +1925,7 @@ class RobotWindow(QWidget):
                 QTimer.singleShot(400, self.start_listening)
 
     # ---------- acoes e expressoes ----------
-    DUR = {"scratch": 4.0, "think": 5.0, "wave": 2.6, "present": 3.0, "water": 6.0,
+    DUR = {"clock": 10.0, "scratch": 4.0, "think": 5.0, "wave": 2.6, "present": 3.0, "water": 6.0,
            "point": 2.5, "stretch": 2.6, "happy": 2.5}
 
     def do_action(self, a):
@@ -1845,7 +1971,7 @@ class RobotWindow(QWidget):
         elif self.listening:
             pose = "listen"
         elif self.action:
-            pose = self.action
+            pose = "rest_float" if self.action == "clock" else self.action
         elif m.talking:
             pose = "talk"
         else:
@@ -1869,6 +1995,8 @@ class RobotWindow(QWidget):
             e = "happy"
         elif self.action == "present":
             e = "excited"
+        elif self.action == "clock":
+            e = "happy"
         else:
             e = "neutral"
         m.expr = e
@@ -1876,6 +2004,11 @@ class RobotWindow(QWidget):
         fx = set()
         if self.action == "water":
             fx.add("cup")
+        if self.action == "clock" or (self.cfg.get("relogio_fixo") and not self.action and not self.sleeping):
+            fx.add("clock")
+            agr = agora()
+            m.clock_text = agr.strftime("%H:%M")
+            m.date_text = f"{DIAS[agr.weekday()][:3].upper()}  {agr.day:02d}/{agr.month:02d}/{agr.year}"
         if self.action == "think" or self.bubble_kind == "thinking":
             fx.add("dots")
         if self.action == "scratch":
@@ -1921,7 +2054,7 @@ class RobotWindow(QWidget):
                 self.say(f"{self.nome}, seu lembrete: {rem[1]}.", "point", "surprised")
 
         # dormir sozinho de madrugada
-        h = datetime.datetime.now().hour
+        h = agora().hour
         if (not self.sleeping and not busy and (h >= 23 or h < 5)
                 and time.monotonic() - self.last_interaction > 20 * 60):
             self.go_sleep()
@@ -1980,7 +2113,7 @@ class RobotWindow(QWidget):
             self.tray.showMessage("Hora da água 💧", msg, QSystemTrayIcon.Information, 6000)
 
     def greet_start(self):
-        now = datetime.datetime.now()
+        now = agora()
         saud = periodo(now.hour)
         robo = self.cfg["nome_robo"]
         if self.cfg.get("primeira_vez", True):
@@ -2000,7 +2133,7 @@ class RobotWindow(QWidget):
         self.say(msg, "wave")
 
     def each_minute(self):
-        now = datetime.datetime.now()
+        now = agora()
         if 5 <= now.hour < 12 and self.cfg.get("ultima_saudacao") != now.date().isoformat():
             self.cfg["ultima_saudacao"] = now.date().isoformat(); save_config(self.cfg)
             self.sleeping = False
@@ -2157,6 +2290,8 @@ class RobotWindow(QWidget):
             QTimer.singleShot(900, lambda u=res["open_url"]: webbrowser.open(u))
         if res.get("pc"):
             QTimer.singleShot(500, lambda c=res["pc"]: self.run_pc(c))
+        if res.get("update"):
+            QTimer.singleShot(2500, self.manual_update)
         if res.get("confirm"):
             self.pending_confirm = (res["confirm"], time.monotonic())
             self.listen_after_speech = True
@@ -2278,6 +2413,8 @@ class RobotWindow(QWidget):
         for label, v in (("Robô menino", "menino"), ("Natural", "normal")):
             add(label, lambda _=False, v=v: self.set_voice(v), self.cfg.get("efeito_voz", "menino") == v, menu=vz)
         add("🔇  Silenciar voz", self.toggle_mute, self.cfg.get("mudo"))
+        add("🕒  Mostrar a hora agora", lambda: self.handle_text("que horas são"))
+        add("🕒  Relógio sempre na mão", self.toggle_clock, self.cfg.get("relogio_fixo"))
         add("🎲  Movimentos aleatórios", self.toggle_random, self.cfg.get("comportamentos_aleatorios", True))
         sz = mn.addMenu("📏  Tamanho")
         for label, v in (("Mini", 0.5), ("Pequeno", 0.65), ("Médio", 0.8), ("Grande", 1.0)):
@@ -2337,6 +2474,9 @@ class RobotWindow(QWidget):
             self.voice.stop()
         self.show_status("Voz desligada." if self.cfg["mudo"] else "Voz ligada.")
 
+    def toggle_clock(self):
+        self.cfg["relogio_fixo"] = not self.cfg.get("relogio_fixo"); save_config(self.cfg)
+
     def toggle_random(self):
         self.cfg["comportamentos_aleatorios"] = not self.cfg.get("comportamentos_aleatorios", True)
         save_config(self.cfg)
@@ -2388,6 +2528,8 @@ class RobotWindow(QWidget):
             self.set_active(False)
         elif cmd == "falar":
             self.set_active(True); self.start_listening()
+        elif cmd == "atualizar":
+            self.set_active(True); self.manual_update()
         elif cmd == "mudo":
             self.toggle_mute()
         elif cmd == "sair":

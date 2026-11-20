@@ -24,3 +24,29 @@
 2026-11-20 18:47:03,241 INFO robo: Voltei, Andrade!
 2026-11-20 18:47:03,472 INFO robo: Boa noite, Andrade! Eu sou o Bravus, seu assistente da Bravus Mídia. Vou ficar aqui flutuando do seu lado. Pra falar comigo, clique em mim ou diga Bravus. E de 30 em 30 minutos eu te lembro de beber água!
 2026-11-20 18:47:03,569 INFO robo: Até logo, Andrade!
+2026-11-20 18:48:30,292 INFO ouviu (continuo): Bravus se atualiza
+2026-11-20 18:48:30,297 INFO robo: Certo, Andrade! Vou procurar uma versão nova agora.
+2026-11-20 18:48:30,379 WARNING escuta indisponivel: PortAudio library not found
+2026-11-20 18:48:31,455 INFO robo: Boa noite, Andrade! Eu sou o Bravus, seu assistente da Bravus Mídia. Vou ficar aqui flutuando do seu lado. Pra falar comigo, clique em mim ou diga Bravus. E de 30 em 30 minutos eu te lembro de beber água!
+2026-11-20 18:52:10,096 INFO relogio https://www.google.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:52:10,157 INFO relogio https://www.cloudflare.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:52:10,159 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>
+2026-11-20 18:52:10,160 WARNING IA falhou: cannot access local variable 'agora' where it is not associated with a value
+2026-11-20 18:52:29,292 INFO robo: Agora são 18 horas e 52 minutos, Andrade.
+2026-11-20 18:52:29,396 WARNING escuta indisponivel: PortAudio library not found
+2026-11-20 18:52:29,629 INFO relogio https://www.google.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:52:29,680 INFO relogio https://www.cloudflare.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:52:29,681 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>
+2026-11-20 18:52:42,180 INFO robo: Agora são 18 horas e 52 minutos, Andrade.
+2026-11-20 18:52:42,253 WARNING escuta indisponivel: PortAudio library not found
+2026-11-20 18:52:42,522 INFO relogio https://www.google.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:52:42,577 INFO relogio https://www.cloudflare.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:52:42,578 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>
+2026-11-20 18:52:52,285 WARNING escuta indisponivel: PortAudio library not found
+2026-11-20 18:52:52,296 INFO relogio https://www.google.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:52:52,564 INFO robo: Voltei, Andrade!
+2026-11-20 18:52:52,613 INFO relogio https://www.cloudflare.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:52:52,614 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>
+2026-11-20 18:52:53,208 INFO robo: Voltei, Andrade!
+2026-11-20 18:52:53,440 INFO robo: Boa noite, Andrade! Eu sou o Bravus, seu assistente da Bravus Mídia. Vou ficar aqui flutuando do seu lado. Pra falar comigo, clique em mim ou diga Bravus. E de 30 em 30 minutos eu te lembro de beber água!
+2026-11-20 18:52:53,535 INFO robo: Até logo, Andrade!

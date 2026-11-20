@@ -1,6 +1,6 @@
 {
-  "versao": "1.5.0",
-  "notas": "Comandos no PC e no navegador; microfone mais sensivel; ativacao por Bravus melhor; voz de menino tambem offline.",
+  "versao": "1.6.0",
+  "notas": "Voz de menino nova (masculina rejuvenescida); relogio pela internet com holograma na mao; IA mais rapida; comando de voz para se atualizar.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
