@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.8.1"
+VERSAO = "1.9.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -60,6 +60,7 @@ DEFAULTS = {
     "ia_modelo": "claude-haiku-5-5",
     "ia_chave_gemini": "",
     "ia_modelo_gemini": "gemini-flash-lite-latest",
+    "bravus_voice_url": "",   # API do BRAVUS VOICE (ex.: http://127.0.0.1:8765) - voz original
     "atualizacao_automatica": True,
     "url_atualizacao": "https://raw.githubusercontent.com/bravusmidia/robo-bravus/main/",
     "fuso_horario": -3,
@@ -550,13 +551,17 @@ class AIWorker(QObject):
     def system_prompt(self):
         nome, robo = self.cfg["nome_usuario"], self.cfg["nome_robo"]
         agr = agora()
+        estilo = ""
+        if self.cfg.get("efeito_voz") == "guerreiro":
+            estilo = (" Nesta voz você fala como um guerreiro orgulhoso e determinado: frases firmes, confiantes, "
+                      "com atitude e um toque de provocação amigável, mas sempre respeitoso e leal a " + nome + ".")
         return (f"Você é o {robo}, um robozinho assistente com jeito de menino, simpático e educado, que flutua "
                 f"na tela do computador de {nome}, CEO da agência Bravus Mídia (marketing digital, tráfego pago, "
                 f"sites, landing pages, automações e mentoria). Hoje é {DIAS[agr.weekday()]}, "
                 f"{agr.day}/{agr.month}/{agr.year}, {agr.hour}h{agr.minute:02d}. "
                 f"Responda a qualquer pergunta, sobre qualquer assunto, sempre em português do Brasil, e chame-o de {nome}. "
                 f"Seja direto: no máximo 3 frases curtas, porque a resposta será falada em voz alta. "
-                f"Não use emojis, listas, asteriscos nem markdown. "
+                f"Não use emojis, listas, asteriscos nem markdown.{estilo} "
                 f"Você controla o navegador do computador: se ele pedir para abrir, mostrar, tocar ou procurar algo na internet, "
                 f"responda curto e coloque no final UMA destas marcações: [SITE:https://endereco] para abrir um site, "
                 f"[PESQUISAR:termo] para pesquisar no Google ou [YOUTUBE:termo] para procurar no YouTube.")
@@ -680,6 +685,8 @@ class AIWorker(QObject):
 VOZ_ESTILOS = {
     "menino": ("pt-BR-AntonioNeural", "+24Hz", "-16%", None, 1.32, 1.3),   # menino pequeno, animado
     "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None, 1.0, 1.0),
+    # guerreiro: voz grave e encorpada (aceleracao < 1 deixa o timbre mais grosso), firme e intensa
+    "guerreiro": ("pt-BR-AntonioNeural", "-16Hz", "+14%", None, 0.88, 0.88),
 }
 
 
@@ -887,8 +894,29 @@ class Voice(QObject):
                                     sample_rate=int(24000 / max(0.5, acel)))
         return dec.samples.tobytes()
 
+    def _bravus_voice(self, rid, text):
+        """Pede o audio a API do BRAVUS VOICE: POST {url}/tts  {"texto": ...}  ->  audio WAV."""
+        import urllib.request
+        url = self.cfg["bravus_voice_url"].rstrip("/") + "/tts"
+        req = urllib.request.Request(url, data=json.dumps({"texto": text}).encode("utf-8"),
+                                     headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = r.read()
+        path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}_bv.wav")
+        with open(path, "wb") as f:
+            f.write(data)
+        log.info("voz: BRAVUS VOICE")
+        self._file_ready.emit(rid, path)
+
     def _generate(self, rid, text):
         self._cleanup()
+        if self.cfg.get("efeito_voz") == "bravus_voice":
+            if self.cfg.get("bravus_voice_url") and self.player is not None:
+                try:
+                    self._bravus_voice(rid, text)
+                    return
+                except Exception as e:
+                    log.warning("BRAVUS VOICE indisponivel, usando a voz normal: %s", e)
         if self.player == "sd":
             import queue
             q = queue.Queue()
@@ -2573,7 +2601,10 @@ class RobotWindow(QWidget):
         mic.addSeparator()
         self.mic_menu(mic)
         vz = mn.addMenu("🔊  Voz")
-        for label, v in (("Robô menino", "menino"), ("Natural", "normal")):
+        opcoes = [("Robô menino", "menino"), ("Guerreiro", "guerreiro"), ("Natural", "normal")]
+        if self.cfg.get("bravus_voice_url"):
+            opcoes.append(("BRAVUS VOICE (voz original)", "bravus_voice"))
+        for label, v in opcoes:
             add(label, lambda _=False, v=v: self.set_voice(v), self.cfg.get("efeito_voz", "menino") == v, menu=vz)
         add("🔇  Silenciar voz", self.toggle_mute, self.cfg.get("mudo"))
         add("🕒  Mostrar a hora agora", lambda: self.handle_text("que horas são"))
@@ -2629,6 +2660,8 @@ class RobotWindow(QWidget):
     def set_voice(self, v):
         self.cfg["efeito_voz"] = v; save_config(self.cfg)
         self.say({"menino": f"Oi, {self.nome}! Essa é minha voz de robô menino. Gostou?",
+                  "guerreiro": f"Voz de guerreiro ativada, {self.nome}. Hoje ninguém nos segura!",
+                  "bravus_voice": f"Voz do Bravus Voice ativada, {self.nome}.",
                   "normal": f"Voz natural ativada, {self.nome}."}[v], "happy")
 
     def toggle_mute(self):
@@ -2872,7 +2905,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(QIcon(QPixmap.fromImage(render_icon(64))))
     cfg = load_config()
-    if cfg.get("efeito_voz") not in VOZ_ESTILOS or not cfg.get("voz_menino_v2"):
+    if (cfg.get("efeito_voz") not in VOZ_ESTILOS and cfg.get("efeito_voz") != "bravus_voice") or not cfg.get("voz_menino_v2"):
         cfg["efeito_voz"] = "menino"; cfg["voz_menino_v2"] = True
     save_config(cfg)
     w = RobotWindow(cfg)

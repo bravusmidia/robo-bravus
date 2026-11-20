@@ -1,6 +1,6 @@
 {
-  "versao": "1.8.1",
-  "notas": "Corrige aviso falso de chave invalida na IA; tenta configuracoes mais simples automaticamente.",
+  "versao": "1.9.0",
+  "notas": "Nova voz Guerreiro (grave, firme, com atitude); pronto para a API do BRAVUS VOICE.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

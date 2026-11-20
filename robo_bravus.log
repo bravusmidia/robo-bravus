@@ -72,3 +72,9 @@
 2026-11-20 19:03:14,861 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>
 2026-11-20 19:04:52,523 WARNING IA falhou: HTTP 400: API key not valid. Please pass a valid API key. API_KEY_INVALID
 2026-11-20 19:04:52,523 WARNING IA falhou: HTTP 400: Request contains an invalid argument.
+2026-11-20 19:11:47,458 INFO audio: sounddevice (voz online disponivel)
+2026-11-20 19:11:47,485 INFO voz: online (guerreiro)
+2026-11-20 19:11:48,668 INFO audio: sounddevice (voz online disponivel)
+2026-11-20 19:11:48,683 INFO voz: BRAVUS VOICE
+2026-11-20 19:11:50,480 INFO audio: sounddevice (voz online disponivel)
+2026-11-20 19:11:50,507 WARNING microfone: 'types.SimpleNamespace' object has no attribute 'RawInputStream'
