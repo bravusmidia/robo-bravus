@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.7"
+VERSAO = "1.4.8"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -54,6 +54,8 @@ DEFAULTS = {
     "comportamentos_aleatorios": True,
     "ia_chave_anthropic": "",
     "ia_modelo": "claude-haiku-5-5",
+    "ia_chave_gemini": "",
+    "ia_modelo_gemini": "gemini-flash-latest",
     "atualizacao_automatica": True,
     "url_atualizacao": "https://raw.githubusercontent.com/bravusmidia/robo-bravus/main/",
     "primeira_vez": True,
@@ -250,7 +252,7 @@ class Brain:
         if has("para de ouvir", "pare de ouvir", "desliga a escuta", "desliga o microfone"):
             return r(f"Ok, {nome}. Só vou ouvir quando você clicar em mim.", None, listen=False)
         if has("piada", "me faz rir", "algo engracado"):
-            return r(random.choice(PIADAS), "happy")
+            return r(random.choice(PIADAS), "happy", chat=True)
         if has("motiva", "motivacao", "frase motivacional", "me anima"):
             return r(f"{nome}, {random.choice(MOTIVACAO)}", "present")
 
@@ -267,21 +269,21 @@ class Brain:
         if has("tudo bem", "como voce esta", "como vai", "tudo certo", "beleza"):
             parts.append(f"Estou ótimo, obrigado por perguntar, {nome}! E com você, tudo bem?"); act = act or "happy"
         if parts:
-            return r(" ".join(parts), act)
+            return r(" ".join(parts), act, chat=True)
 
         if has("estou bem", "to bem", "tudo otimo", "tudo tranquilo"):
-            return r(f"Que bom, {nome}! Fico feliz em saber.", "happy")
+            return r(f"Que bom, {nome}! Fico feliz em saber.", "happy", chat=True)
         if has("quem e voce", "seu nome", "como voce se chama", "quem te criou", "o que voce e"):
-            return r(f"Eu sou o {robo}, o assistente da Bravus Mídia. Fui criado pra ajudar você, {nome}, todos os dias.", "present")
+            return r(f"Eu sou o {robo}, o assistente da Bravus Mídia. Fui criado pra ajudar você, {nome}, todos os dias.", "present", chat=True)
         if has("o que voce faz", "o que voce sabe", "ajuda", "comandos"):
             return r(f"Eu te lembro de beber água, digo as horas, abro sites, pesquiso no Google, "
                      f"crio lembretes e converso com você, {nome}. É só me chamar de {robo}.", "present")
         if has("obrigado", "obrigada", "valeu", "agradeco"):
-            return r(f"Por nada, {nome}! Sempre às ordens.", "happy")
+            return r(f"Por nada, {nome}! Sempre às ordens.", "happy", chat=True)
         if has("tchau", "ate logo", "ate mais", "falou"):
-            return r(f"Até logo, {nome}! Eu fico aqui se precisar.", "wave")
+            return r(f"Até logo, {nome}! Eu fico aqui se precisar.", "wave", chat=True)
         if has("te amo", "gosto de voce", "voce e legal", "voce e demais"):
-            return r(f"Que gentileza, {nome}! Também gosto muito de trabalhar com você.", "happy")
+            return r(f"Que gentileza, {nome}! Também gosto muito de trabalhar com você.", "happy", chat=True)
         if has("bravus midia", "minha agencia", "a agencia"):
             return r(f"A Bravus Mídia trabalha com tráfego pago, sites, landing pages, automações e mentoria. "
                      f"E vai escalar muito, {nome}!", "present")
@@ -291,45 +293,129 @@ class Brain:
 # ----------------------------------------------------------------------------
 # IA opcional (Claude)
 # ----------------------------------------------------------------------------
+def http_json(url, body=None, headers=None, timeout=40):
+    """GET/POST JSON. Se o Python nao conseguir (certificados antigos), usa o curl do Windows."""
+    import urllib.request, urllib.error
+    headers = dict(headers or {})
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    if data is not None:
+        headers["content-type"] = "application/json"
+    try:
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code}: {e.read().decode('utf-8', 'ignore')[:300]}")
+    except Exception as e:
+        curl = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "curl.exe")
+        if sys.platform != "win32" or not os.path.exists(curl):
+            raise
+        log.info("python sem acesso (%s); usando curl", e)
+        cmd = [curl, "-sS", "-m", str(timeout), url]
+        for k, v in headers.items():
+            cmd += ["-H", f"{k}: {v}"]
+        if data is not None:
+            cmd += ["--data-binary", "@-"]
+        r = subprocess.run(cmd, input=data, capture_output=True, timeout=timeout + 10, creationflags=0x08000000)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.decode("utf-8", "ignore")[-300:])
+        out = json.loads(r.stdout.decode("utf-8"))
+        if isinstance(out, dict) and "error" in out and not out.get("candidates") and not out.get("content"):
+            raise RuntimeError(str(out["error"])[:300])
+        return out
+
+
 class AIWorker(QObject):
+    """Cerebro de IA: Gemini (Google, tem plano gratis) ou Claude (Anthropic, pago por uso)."""
     answered = Signal(str)
 
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.history = []
+        self.history = []   # [(pergunta, resposta)]
+
+    def provider(self):
+        if self.cfg.get("ia_chave_gemini", "").strip():
+            return "gemini"
+        if self.cfg.get("ia_chave_anthropic", "").strip():
+            return "anthropic"
+        return None
 
     def available(self):
-        return bool(self.cfg.get("ia_chave_anthropic", "").strip())
+        return self.provider() is not None
 
     def ask(self, text):
         threading.Thread(target=self._run, args=(text,), daemon=True).start()
 
-    def _run(self, text):
-        import urllib.request
+    def system_prompt(self):
         nome, robo = self.cfg["nome_usuario"], self.cfg["nome_robo"]
-        system = (f"Você é o {robo}, um robozinho assistente que flutua na tela do computador de {nome}, "
-                  f"dono da agência Bravus Mídia (marketing digital, tráfego pago, sites, landing pages, automações e mentoria). "
-                  f"Fale sempre em português do Brasil, com educação e simpatia, e chame-o de {nome}. "
-                  f"Responda em no máximo 3 frases curtas, porque a resposta será falada em voz alta. "
-                  f"Não use emojis, listas nem markdown.")
-        msgs = self.history[-10:] + [{"role": "user", "content": text}]
-        body = {"model": self.cfg.get("ia_modelo", "claude-haiku-5-5"), "max_tokens": 300,
-                "system": system, "messages": msgs}
+        agora = datetime.datetime.now()
+        return (f"Você é o {robo}, um robozinho assistente com jeito de menino, simpático e educado, que flutua "
+                f"na tela do computador de {nome}, CEO da agência Bravus Mídia (marketing digital, tráfego pago, "
+                f"sites, landing pages, automações e mentoria). Hoje é {DIAS[agora.weekday()]}, "
+                f"{agora.day}/{agora.month}/{agora.year}, {agora.hour}h{agora.minute:02d}. "
+                f"Responda a qualquer pergunta, sobre qualquer assunto, sempre em português do Brasil, e chame-o de {nome}. "
+                f"Seja direto: no máximo 3 frases curtas, porque a resposta será falada em voz alta. "
+                f"Não use emojis, listas, asteriscos nem markdown.")
+
+    def _gemini(self, text):
+        key = self.cfg["ia_chave_gemini"].strip()
+        contents = []
+        for q, a in self.history[-6:]:
+            contents += [{"role": "user", "parts": [{"text": q}]}, {"role": "model", "parts": [{"text": a}]}]
+        contents.append({"role": "user", "parts": [{"text": text}]})
+        body = {"system_instruction": {"parts": [{"text": self.system_prompt()}]}, "contents": contents,
+                "generationConfig": {"maxOutputTokens": 400, "temperature": 0.8}}
+        base = "https://generativelanguage.googleapis.com/v1beta/"
+        hdr = {"x-goog-api-key": key}
+        model = self.cfg.get("ia_modelo_gemini") or "gemini-flash-latest"
         try:
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages", data=json.dumps(body).encode("utf-8"),
-                headers={"x-api-key": self.cfg["ia_chave_anthropic"].strip(),
-                         "anthropic-version": "2023-06-01", "content-type": "application/json"})
-            with urllib.request.urlopen(req, timeout=40) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            out = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
-            out = out.replace("*", "").replace("#", "")
-            self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": out}]
-            self.answered.emit(out or f"Desculpa, {nome}, não consegui pensar numa resposta agora.")
+            data = http_json(f"{base}models/{model}:generateContent", body, hdr)
+        except RuntimeError as e:
+            if "404" not in str(e) and "not found" not in str(e).lower():
+                raise
+            # modelo saiu do ar: escolhe sozinho um modelo "flash" disponivel na conta
+            lst = http_json(f"{base}models?pageSize=200", None, hdr).get("models", [])
+            ok = [m["name"].split("/")[-1] for m in lst
+                  if "generateContent" in m.get("supportedGenerationMethods", [])
+                  and "flash" in m["name"] and not any(x in m["name"] for x in ("live", "tts", "image", "audio", "embedding"))]
+            if not ok:
+                raise
+            ok.sort(key=lambda n: ("preview" in n or "exp" in n, [-int(x) for x in re.findall(r"\d+", n)[:2]]))
+            model = ok[0]
+            self.cfg["ia_modelo_gemini"] = model; save_config(self.cfg)
+            data = http_json(f"{base}models/{model}:generateContent", body, hdr)
+        parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+        return "".join(p.get("text", "") for p in parts).strip()
+
+    def _anthropic(self, text):
+        msgs = []
+        for q, a in self.history[-6:]:
+            msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
+        msgs.append({"role": "user", "content": text})
+        body = {"model": self.cfg.get("ia_modelo", "claude-haiku-5-5"), "max_tokens": 400,
+                "system": self.system_prompt(), "messages": msgs}
+        data = http_json("https://api.anthropic.com/v1/messages", body,
+                         {"x-api-key": self.cfg["ia_chave_anthropic"].strip(), "anthropic-version": "2023-06-01"})
+        return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+
+    def _run(self, text):
+        nome = self.cfg["nome_usuario"]
+        try:
+            out = self._gemini(text) if self.provider() == "gemini" else self._anthropic(text)
+            out = re.sub(r"[*#_`]", "", out).strip()
+            if out:
+                self.history.append((text, out))
+            self.answered.emit(out or f"Hmm, não consegui pensar numa resposta agora, {nome}.")
         except Exception as e:
             log.warning("IA falhou: %s", e)
-            self.answered.emit(f"Desculpa, {nome}, não consegui acessar a inteligência artificial agora.")
+            msg = str(e)
+            if "429" in msg or "quota" in msg.lower():
+                self.answered.emit(f"{nome}, usei todas as perguntas grátis por agora. Daqui a pouco eu volto a responder.")
+            elif "400" in msg or "401" in msg or "403" in msg or "API key" in msg:
+                self.answered.emit(f"{nome}, a chave da inteligência artificial parece inválida. Confere no menu, em Configurar IA.")
+            else:
+                self.answered.emit(f"Desculpa, {nome}, não consegui acessar a inteligência artificial agora.")
 
 
 # ----------------------------------------------------------------------------
@@ -1767,6 +1853,8 @@ class RobotWindow(QWidget):
         self.last_interaction = time.monotonic()
         self.sleeping = False
         res = self.brain.respond(text)
+        if res is not None and res.get("chat") and self.ai.available() and len(text.split()) > 3:
+            res = None   # pergunta de verdade: deixa a IA responder
         if res is None:
             if self.ai.available():
                 self.bubble_kind = "thinking"
@@ -1777,7 +1865,7 @@ class RobotWindow(QWidget):
                 self.ai.ask(text)
             else:
                 self.say(random.choice([
-                    f"Ainda não sei responder isso, {self.nome}. Se colocar uma chave de IA nas configurações, eu fico bem mais esperto!",
+                    f"Ainda não sei responder isso, {self.nome}. Clique em mim com o botão direito, em Configurar IA, e eu passo a responder tudo!",
                     f"Hmm, essa eu não sei, {self.nome}. Posso pesquisar no Google pra você, é só dizer: pesquisa e o assunto.",
                 ]), "scratch")
             return
@@ -1885,10 +1973,34 @@ class RobotWindow(QWidget):
         if sys.platform == "win32":
             add("🚀  Iniciar com o Windows", self.toggle_autostart, os.path.exists(startup_path()))
         mn.addSeparator()
+        add("🧠  Configurar IA (responder tudo)" + ("  ✓" if self.ai.available() else ""), self.config_ai)
         add(f"🔄  Procurar atualização (v{VERSAO})", self.manual_update)
         add("⚙️  Abrir configurações", lambda: os.startfile(CONFIG_PATH) if sys.platform == "win32" else None)
         add("🙈  Desativar (Ctrl+Alt+B)", lambda: self.set_active(False))
         add("❌  Sair", self.quit_app)
+
+    def config_ai(self):
+        txt, ok = QInputDialog.getText(
+            self, "Robô Bravus - Inteligência Artificial",
+            "Cole aqui a sua chave de IA:\n\n"
+            "• Gemini (grátis): crie em aistudio.google.com/apikey  (começa com AIza...)\n"
+            "• Claude (pago): crie em console.anthropic.com  (começa com sk-ant-...)\n\n"
+            "Para remover a chave, deixe em branco e clique OK.")
+        if not ok:
+            return
+        k = txt.strip()
+        if k.startswith("sk-ant"):
+            self.cfg["ia_chave_anthropic"] = k; self.cfg["ia_chave_gemini"] = ""
+        elif k:
+            self.cfg["ia_chave_gemini"] = k; self.cfg["ia_chave_anthropic"] = ""
+        else:
+            self.cfg["ia_chave_gemini"] = ""; self.cfg["ia_chave_anthropic"] = ""
+        save_config(self.cfg)
+        if k:
+            self.say(f"Chave salva, {self.nome}! Agora pode me perguntar qualquer coisa. Vou testar...", "happy")
+            QTimer.singleShot(4500, lambda: self.handle_text("Se apresente em uma frase curta e diga que está pronto pra ajudar."))
+        else:
+            self.say(f"Chave removida, {self.nome}.")
 
     def toggle_water(self):
         self.cfg["lembrete_agua_ativo"] = not self.cfg.get("lembrete_agua_ativo", True)

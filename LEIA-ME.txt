@@ -45,12 +45,11 @@ FRASES QUE ELE ENTENDE (exemplos)
   "Bravus, senta / levanta / coca a cabeca / pensa / vai dormir"
   "Bravus, fica quieto" (so texto)   "Bravus, pode falar" (volta a voz)
 
-DEIXAR ELE MAIS INTELIGENTE (opcional)
-Sem IA ele responde aos comandos acima. Para conversar sobre QUALQUER assunto:
-1. Crie uma chave em https://console.anthropic.com (API da Anthropic, paga por uso, centavos)
-2. Botao direito no robo > Abrir configuracoes
-3. Cole a chave em "ia_chave_anthropic": "sk-ant-..."
-4. Salve, feche o robo (Sair) e abra de novo pelo atalho.
+DEIXAR ELE RESPONDER TUDO (IA)
+1. Crie uma chave gratis do Gemini em https://aistudio.google.com/apikey
+   (ou uma chave paga do Claude em https://console.anthropic.com)
+2. Botao direito no robo > Configurar IA > cole a chave > OK
+3. Pronto: ele responde qualquer pergunta por voz.
 
 CONFIGURACOES (config.json)
   lembrete_agua_min ....... intervalo do lembrete (30)

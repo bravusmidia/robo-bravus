@@ -1,2 +1,8 @@
 2026-11-20 18:24:48,123 WARNING escuta indisponivel: No module named 'speech_recognition'
 2026-11-20 18:38:42,404 INFO robo: Oi, Andrade! Essa é minha voz de robô menino. Gostou?
+2026-11-20 18:40:40,076 INFO robo: Oi, Andrade! Em que posso ajudar?
+2026-11-20 18:40:40,132 INFO robo: Paris é a capital da França, Andrade!
+2026-11-20 18:40:40,171 WARNING escuta indisponivel: PortAudio library not found
+2026-11-20 18:40:41,245 INFO robo: Boa noite, Andrade! Eu sou o Bravus, seu assistente da Bravus Mídia. Vou ficar aqui flutuando do seu lado. Pra falar comigo, clique em mim ou diga Bravus. E de 30 em 30 minutos eu te lembro de beber água!
+2026-11-20 18:40:43,112 INFO robo: Agora são 18 horas e 40 minutos, Andrade.
+2026-11-20 18:40:49,178 WARNING IA falhou: HTTP 429: quota

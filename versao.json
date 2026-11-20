@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.7",
-  "notas": "Faz uma acao natural a cada 1 minuto (sentar, cocar a cabeca, pensar, acenar, espreguicar, cochilar).",
+  "versao": "1.4.8",
+  "notas": "Responde tudo com IA (Gemini gratis ou Claude); menu Configurar IA.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
