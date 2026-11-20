@@ -50,3 +50,15 @@
 2026-11-20 18:52:53,208 INFO robo: Voltei, Andrade!
 2026-11-20 18:52:53,440 INFO robo: Boa noite, Andrade! Eu sou o Bravus, seu assistente da Bravus Mídia. Vou ficar aqui flutuando do seu lado. Pra falar comigo, clique em mim ou diga Bravus. E de 30 em 30 minutos eu te lembro de beber água!
 2026-11-20 18:52:53,535 INFO robo: Até logo, Andrade!
+2026-11-20 18:58:52,964 INFO audio: sounddevice (voz online disponivel)
+2026-11-20 18:58:55,979 INFO audio: sounddevice (voz online disponivel)
+2026-11-20 18:58:55,984 INFO ouviu (continuo): Oi Brabos que horas são
+2026-11-20 18:58:55,993 INFO ouviu (continuo): brabo abre o youtube
+2026-11-20 18:58:55,995 INFO ouviu (continuo): eu adoro tocar violão
+2026-11-20 18:58:55,995 INFO ouviu sem a palavra Bravus: eu adoro tocar violão
+2026-11-20 18:58:56,008 WARNING microfone: 'types.SimpleNamespace' object has no attribute 'RawInputStream'
+2026-11-20 18:58:56,281 INFO relogio https://www.google.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:58:56,321 INFO relogio https://www.cloudflare.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 18:58:56,322 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>
+2026-11-20 18:59:03,526 INFO audio: sounddevice (voz online disponivel)
+2026-11-20 18:59:03,551 INFO voz: online (menino)

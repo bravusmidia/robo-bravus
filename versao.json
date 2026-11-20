@@ -1,6 +1,6 @@
 {
-  "versao": "1.6.1",
-  "notas": "Registro abre direto no Bloco de notas.",
+  "versao": "1.7.0",
+  "notas": "Voz nova finalmente toca (som direto na placa de audio); microfone menos surdo com video no fundo; entende Brabos; IA tenta de novo quando o Google esta ocupado.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

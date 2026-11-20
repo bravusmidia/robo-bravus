@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.6.1"
+VERSAO = "1.7.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -31,8 +31,11 @@ from PySide6.QtWidgets import QApplication, QWidget, QMenu, QSystemTrayIcon, QIn
 try:
     from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
     HAS_MM = True
-except Exception:  # pragma: no cover
+except Exception as _e:  # pragma: no cover
     HAS_MM = False
+    _MM_ERRO = str(_e)
+
+_PYTTSX_LOCK = threading.Lock()
 
 # ----------------------------------------------------------------------------
 # Configuracao
@@ -45,7 +48,7 @@ DEFAULTS = {
     "lembrete_agua_ativo": True,
     "lembrete_agua_min": 30,
     "escuta_continua": True,
-    "palavras_ativacao": ["bravus", "bravos", "bravo", "brabus", "bravis", "bravu", "robo", "robozinho"],
+    "palavras_ativacao": ["bravus", "bravos", "bravo", "brabus", "brabos", "brabo", "bravis", "bravu", "brávus", "robo", "robozinho"],
     "microfone": None,
     "voz": "pt-BR-AntonioNeural",
     "voz_velocidade": "+4%",
@@ -592,6 +595,14 @@ class AIWorker(QObject):
                 tentativas += 1
                 if tentativas > 6:
                     raise
+                if any(x in msg for x in ("503", "unavailable", "overloaded", "high demand", "500", "timed out")):
+                    if tentativas == 1:
+                        time.sleep(1.2); continue
+                    # troca para o outro modelo rapido
+                    model = "gemini-flash-latest" if "lite" in model else "gemini-flash-lite-latest"
+                    if tentativas <= 3:
+                        continue
+                    raise
                 if ("404" in msg or "not found" in msg):
                     lst = http_json(f"{base}models?pageSize=200", None, hdr).get("models", [])
                     ok = [m["name"].split("/")[-1] for m in lst
@@ -635,7 +646,9 @@ class AIWorker(QObject):
         except Exception as e:
             log.warning("IA falhou: %s", e)
             msg = str(e)
-            if "429" in msg or "quota" in msg.lower():
+            if any(x in msg.lower() for x in ("503", "unavailable", "high demand", "overloaded")):
+                self.answered.emit(f"{nome}, a inteligência artificial do Google está muito ocupada agora. Me pergunta de novo daqui a pouquinho.")
+            elif "429" in msg or "quota" in msg.lower():
                 self.answered.emit(f"{nome}, usei todas as perguntas grátis por agora. Daqui a pouco eu volto a responder.")
             elif "400" in msg or "401" in msg or "403" in msg or "API key" in msg:
                 self.answered.emit(f"{nome}, a chave da inteligência artificial parece inválida. Confere no menu, em Configurar IA.")
@@ -739,7 +752,14 @@ class Voice(QObject):
         self.player = None
         self.tmpdir = os.path.join(tempfile.gettempdir(), "robo_bravus_tts")
         os.makedirs(self.tmpdir, exist_ok=True)
-        if HAS_MM:
+        self._stop_evt = threading.Event()
+        try:   # toca o som direto na placa de audio (nao depende do QtMultimedia)
+            import sounddevice, miniaudio  # noqa: F401
+            self.player = "sd"
+            log.info("audio: sounddevice (voz online disponivel)")
+        except Exception as e:
+            log.warning("sounddevice/miniaudio indisponivel: %s", e)
+        if self.player is None and HAS_MM:
             try:
                 self.player = QMediaPlayer()
                 self.audio = QAudioOutput()
@@ -767,7 +787,8 @@ class Voice(QObject):
     def stop(self):
         self.req += 1
         self.pending = False
-        if self.player:
+        self._stop_evt.set()
+        if self.player is not None and self.player != "sd":
             self.player.stop()
         self._set_talking(False)
 
@@ -830,6 +851,14 @@ class Voice(QObject):
         self._speak_offline(rid, text)
 
     def _speak_offline(self, rid, text):
+        if not _PYTTSX_LOCK.acquire(timeout=15):
+            self._fallback_state.emit(rid, False); return
+        try:
+            self._speak_offline_locked(rid, text)
+        finally:
+            _PYTTSX_LOCK.release()
+
+    def _speak_offline_locked(self, rid, text):
         try:
             import pyttsx3
             eng = pyttsx3.init()
@@ -872,9 +901,47 @@ class Voice(QObject):
     def _play_file(self, rid, path):
         if rid != self.req:
             return
+        if self.player == "sd":
+            self._stop_evt = threading.Event()
+            threading.Thread(target=self._sd_play, args=(rid, path, self._stop_evt), daemon=True).start()
+            return
         self.pending = False
         self.player.setSource(QUrl.fromLocalFile(path))
         self.player.play()
+
+    def _sd_play(self, rid, path, stop_evt):
+        """Toca WAV/MP3 pela placa de som usando sounddevice."""
+        try:
+            import sounddevice as sd
+            if path.lower().endswith(".wav"):
+                import wave
+                with wave.open(path, "rb") as w:
+                    rate, ch = w.getframerate(), w.getnchannels()
+                    raw = w.readframes(w.getnframes())
+                if ch == 2:
+                    raw = array("h", raw)[::2].tobytes()
+            else:
+                import miniaudio
+                rate = 24000
+                dec = miniaudio.decode_file(path, output_format=miniaudio.SampleFormat.SIGNED16,
+                                            nchannels=1, sample_rate=rate)
+                raw = dec.samples.tobytes()
+            if rid != self.req or stop_evt.is_set():
+                return
+            self._fallback_state.emit(rid, True)
+            chunk = 2048 * 2
+            with sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16") as out:
+                for i in range(0, len(raw), chunk):
+                    if stop_evt.is_set() or rid != self.req:
+                        break
+                    out.write(raw[i:i + chunk])
+        except Exception as e:
+            log.warning("falha ao tocar audio: %s", e)
+            if rid == self.req and not stop_evt.is_set():
+                self._player_broken = True
+                self._speak_offline(rid, self._last_text)
+                return
+        self._fallback_state.emit(rid, False)
 
     def _on_state(self, st):
         self._set_talking(st == QMediaPlayer.PlaybackState.PlayingState)
@@ -897,6 +964,7 @@ class Listener(QObject):
 
     RATE, BLOCK = 16000, 480  # blocos de 30 ms
     MIN_THR = 160.0           # sensibilidade (menor = ouve mais baixo)
+    MAX_THR = 2200.0          # mesmo com som de video no fundo, nao fica "surdo"
 
     def __init__(self, cfg, is_busy):
         super().__init__()
@@ -934,7 +1002,7 @@ class Listener(QObject):
             data, _ = self.stream.read(self.BLOCK)
             vals.append(self.rms(bytes(data)))
         self.ambient = sum(vals) / len(vals)
-        self.threshold = max(self.MIN_THR, self.ambient * 2.5)
+        self.threshold = min(self.MAX_THR, max(self.MIN_THR, self.ambient * 2.0))
         log.info("microfone aberto (aparelho %s); ruido %.0f, limite %.0f", dev, self.ambient, self.threshold)
 
     def _close(self):
@@ -969,7 +1037,7 @@ class Listener(QObject):
                 else:
                     pre.append(data)
                     self.ambient = self.ambient * 0.97 + lvl * 0.03
-                    self.threshold = max(self.MIN_THR, self.ambient * 2.5)
+                    self.threshold = min(self.MAX_THR, max(self.MIN_THR, self.ambient * 2.0))
                     if time.monotonic() - start > limit:
                         return None
             else:
@@ -2214,11 +2282,11 @@ class RobotWindow(QWidget):
             import difflib
             n = norm(text)
             words = re.findall(r"[\w']+", n)
-            wake = [norm(w) for w in self.cfg.get("palavras_ativacao", [])] + ["bravus"]
+            wake = [norm(w) for w in self.cfg.get("palavras_ativacao", [])] + ["bravus", "bravos", "brabos", "brabus", "brabo", "bravo"]
             idx = None
             for i, w in enumerate(words):
                 cand = [w] + ([w + words[i + 1]] if i + 1 < len(words) else [])
-                if any(c in wake or difflib.SequenceMatcher(None, c, "bravus").ratio() >= 0.72 for c in cand):
+                if any(c in wake or difflib.SequenceMatcher(None, c, "bravus").ratio() >= 0.66 for c in cand):
                     idx = i
                     break
             if idx is None:
