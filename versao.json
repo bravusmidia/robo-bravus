@@ -1,6 +1,6 @@
 {
-  "versao": "1.7.0",
-  "notas": "Voz nova finalmente toca (som direto na placa de audio); microfone menos surdo com video no fundo; entende Brabos; IA tenta de novo quando o Google esta ocupado.",
+  "versao": "1.8.0",
+  "notas": "Voz de menino mais nova e animada; comeca a falar em menos de 1 segundo (fala em pedacos); bipe instantaneo ao chamar Bravus; microfone mais sensivel.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

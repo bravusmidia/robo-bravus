@@ -62,3 +62,11 @@
 2026-11-20 18:58:56,322 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>
 2026-11-20 18:59:03,526 INFO audio: sounddevice (voz online disponivel)
 2026-11-20 18:59:03,551 INFO voz: online (menino)
+2026-11-20 19:03:11,416 INFO audio: sounddevice (voz online disponivel)
+2026-11-20 19:03:11,763 INFO voz: online (menino)
+2026-11-20 19:03:14,440 INFO audio: sounddevice (voz online disponivel)
+2026-11-20 19:03:14,445 INFO ouviu (continuo): brabos
+2026-11-20 19:03:14,468 WARNING microfone: 'types.SimpleNamespace' object has no attribute 'RawInputStream'
+2026-11-20 19:03:14,806 INFO relogio https://www.google.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 19:03:14,860 INFO relogio https://www.cloudflare.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
+2026-11-20 19:03:14,861 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>

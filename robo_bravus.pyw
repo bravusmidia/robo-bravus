@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.7.0"
+VERSAO = "1.8.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -665,7 +665,7 @@ class AIWorker(QObject):
 # estilo: (voz online, tom, velocidade, efeito, aceleracao online, aceleracao da voz do Windows)
 # Menino: voz masculina com a voz "encolhida" (aceleracao) -> timbre de crianca, e metal bem leve.
 VOZ_ESTILOS = {
-    "menino": ("pt-BR-AntonioNeural", "+18Hz", "-10%", "metal_leve", 1.2, 1.25),
+    "menino": ("pt-BR-AntonioNeural", "+24Hz", "-16%", None, 1.32, 1.3),   # menino pequeno, animado
     "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None, 1.0, 1.0),
 }
 
@@ -774,6 +774,24 @@ class Voice(QObject):
         self._fallback_state.connect(self._on_fallback)
         self._last_text = ""
 
+    def beep(self):
+        """Bipe curto de 'estou ouvindo' (instantaneo, nao usa internet)."""
+        def run():
+            try:
+                import sounddevice as sd
+                rate = 24000
+                pcm = array("h")
+                for f, dur in ((880, 0.07), (1320, 0.09)):
+                    n = int(rate * dur)
+                    for i in range(n):
+                        env = min(1.0, i / 200, (n - i) / 200)
+                        pcm.append(int(9000 * env * math.sin(2 * math.pi * f * i / rate)))
+                with sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16") as out:
+                    out.write(pcm.tobytes())
+            except Exception as e:
+                log.info("bipe: %s", e)
+        threading.Thread(target=run, daemon=True).start()
+
     def busy(self):
         return self.talking or self.pending or (time.monotonic() - self.last_end) < 0.7
 
@@ -812,43 +830,106 @@ class Voice(QObject):
             except Exception:
                 pass
 
+    @staticmethod
+    def _frases(text):
+        partes = re.split(r"(?<=[.!?…])\s+", text.strip())
+        out, buf = [], ""
+        for p in partes:            # junta frases muito curtas para soar natural
+            buf = (buf + " " + p).strip()
+            if len(buf) > 25 or p is partes[-1]:
+                out.append(buf); buf = ""
+        if buf:
+            out.append(buf)
+        return out or [text]
+
+    def _edge_mp3(self, text, path):
+        import asyncio
+        import edge_tts
+        voz, tom, vel = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])[:3]
+
+        async def go():
+            ultimo = None
+            for v in dict.fromkeys([getattr(self, "_voz_ok", voz), voz, "pt-BR-AntonioNeural"]):
+                try:
+                    await edge_tts.Communicate(text, v, rate=vel, pitch=tom).save(path)
+                    if os.path.getsize(path) > 0:
+                        self._voz_ok = v
+                        return
+                except Exception as e:
+                    ultimo = e
+            raise ultimo or RuntimeError("sem audio")
+        asyncio.run(go())
+
+    def _decode(self, path):
+        """MP3 -> PCM ja com a voz 'encolhida' (aceleracao feita pelo miniaudio, em C: instantaneo)."""
+        import miniaudio
+        est = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
+        efeito, acel = est[3], est[4]
+        if efeito:
+            wav = robotize_mp3(path, efeito, acel)
+            import wave
+            with wave.open(wav, "rb") as w:
+                return w.readframes(w.getnframes())
+        dec = miniaudio.decode_file(path, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1,
+                                    sample_rate=int(24000 / max(0.5, acel)))
+        return dec.samples.tobytes()
+
     def _generate(self, rid, text):
         self._cleanup()
-        if self.player is not None:
+        if self.player == "sd":
+            import queue
+            q = queue.Queue()
+            iniciou = False
             try:
-                import asyncio
-                import edge_tts
-                path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}.mp3")
-
-                async def go():
-                    voz, tom, vel, _, _, _ = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
-                    ultimo = None
-                    # se a voz escolhida nao existir mais no servidor, tenta as parecidas
-                    for v in dict.fromkeys([voz, voz.replace("Neural", "MultilingualNeural"),
-                                            "pt-BR-FranciscaNeural", "pt-BR-AntonioNeural"]):
-                        try:
-                            await edge_tts.Communicate(text, v, rate=vel, pitch=tom).save(path)
-                            if os.path.getsize(path) > 0:
-                                return
-                        except Exception as e:
-                            ultimo = e
-                    raise ultimo or RuntimeError("sem audio")
-
-                asyncio.run(go())
-                if os.path.exists(path) and os.path.getsize(path) > 0:
-                    est = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
-                    efeito, acel = est[3], est[4]
-                    log.info("voz: online (%s)", self.cfg.get("efeito_voz"))
-                    if efeito or acel != 1.0:
-                        try:
-                            path = robotize_mp3(path, efeito, acel)
-                        except Exception as e:
-                            log.info("efeito robo indisponivel: %s", e)
-                    self._file_ready.emit(rid, path)
+                for i, frase in enumerate(self._frases(text)):
+                    path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}_{i}.mp3")
+                    self._edge_mp3(frase, path)
+                    pcm = self._decode(path)
+                    if rid != self.req:
+                        return
+                    q.put(pcm)
+                    if not iniciou:
+                        iniciou = True
+                        log.info("voz: online (%s)", self.cfg.get("efeito_voz"))
+                        self._stop_evt = threading.Event()
+                        threading.Thread(target=self._sd_queue, args=(rid, q, self._stop_evt), daemon=True).start()
+                q.put(None)
+                return
+            except Exception as e:
+                q.put(None)
+                log.warning("voz online falhou, usando voz do Windows: %s", e)
+                if iniciou:
                     return
+        elif self.player is not None:
+            try:
+                path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}.mp3")
+                self._edge_mp3(text, path)
+                est = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
+                if est[3] or est[4] != 1.0:
+                    path = robotize_mp3(path, est[3], est[4])
+                self._file_ready.emit(rid, path)
+                return
             except Exception as e:
                 log.warning("voz online falhou, usando voz do Windows: %s", e)
         self._speak_offline(rid, text)
+
+    def _sd_queue(self, rid, q, stop_evt):
+        """Toca os pedacos de fala em sequencia, assim que ficam prontos."""
+        import sounddevice as sd
+        self._fallback_state.emit(rid, True)
+        try:
+            with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as out:
+                while not stop_evt.is_set() and rid == self.req:
+                    pcm = q.get(timeout=30)
+                    if pcm is None:
+                        break
+                    for i in range(0, len(pcm), 4096):
+                        if stop_evt.is_set() or rid != self.req:
+                            break
+                        out.write(pcm[i:i + 4096])
+        except Exception as e:
+            log.warning("falha ao tocar audio: %s", e)
+        self._fallback_state.emit(rid, False)
 
     def _speak_offline(self, rid, text):
         if not _PYTTSX_LOCK.acquire(timeout=15):
@@ -963,8 +1044,8 @@ class Listener(QObject):
     level = Signal(float)     # 0..1, para mostrar que esta ouvindo
 
     RATE, BLOCK = 16000, 480  # blocos de 30 ms
-    MIN_THR = 160.0           # sensibilidade (menor = ouve mais baixo)
-    MAX_THR = 2200.0          # mesmo com som de video no fundo, nao fica "surdo"
+    MIN_THR = 120.0           # sensibilidade (menor = ouve mais baixo)
+    MAX_THR = 1800.0          # mesmo com som de video no fundo, nao fica "surdo"
 
     def __init__(self, cfg, is_busy):
         super().__init__()
@@ -1046,7 +1127,7 @@ class Listener(QObject):
                     silence = 0; voiced += 1
                 else:
                     silence += 1
-                if silence > 20 or len(frames) > 400:
+                if silence > 16 or len(frames) > 400:
                     break
         if voiced < 8:
             return None
@@ -2216,8 +2297,9 @@ class RobotWindow(QWidget):
         self.sleeping = False
         self.listening = True
         self.last_interaction = time.monotonic()
-        self.show_status(f"Estou ouvindo, {self.nome}...", 30)
-        self.listener.force = True
+        self.show_status(f"Pode falar, {self.nome}...", 30)
+        self.voice.beep()   # bipe de "pode falar"; o microfone abre logo depois dele
+        QTimer.singleShot(380, lambda: self.listening and setattr(self.listener, "force", True))
 
     def stop_listening(self):
         self.listener.force = False
@@ -2296,8 +2378,8 @@ class RobotWindow(QWidget):
             if rest and difflib.SequenceMatcher(None, words[idx] + (words[idx + 1] if idx + 1 < len(words) else ""), "bravus").ratio() > 0.9:
                 rest = " ".join(words[idx + 2:]).strip()
             if len(rest) < 2:
-                self.listen_after_speech = True
-                self.say(f"Oi, {self.nome}! Pode falar.", expr="happy")
+                self.set_expr("happy", 1.5)
+                self.start_listening()
                 return
             text = rest
         self.listening = False
