@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.3"
+VERSAO = "1.4.4"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -49,7 +49,7 @@ DEFAULTS = {
     "voz": "pt-BR-AntonioNeural",
     "voz_velocidade": "+4%",
     "voz_tom": "+28Hz",
-    "efeito_voz": "robo",
+    "efeito_voz": "menino",
     "mudo": False,
     "comportamentos_aleatorios": True,
     "ia_chave_anthropic": "",
@@ -335,12 +335,14 @@ class AIWorker(QObject):
 # ----------------------------------------------------------------------------
 # Efeito de voz robotica
 # ----------------------------------------------------------------------------
-# estilo: (tom da voz, efeito)  efeito: None | "metal" | "metal_forte"
+# estilo: (voz do Edge, tom, velocidade, efeito)   efeito: None | "metal" | "metal_forte"
 VOZ_ESTILOS = {
-    "robo": ("+14Hz", "metal"),            # robo limpo, sem tremer
-    "robo_metalico": ("+6Hz", "metal_forte"),
-    "grave": ("-14Hz", None),              # voz realista mais grossa e firme
-    "normal": ("+0Hz", None),              # voz realista natural
+    "menino": ("pt-BR-ThalitaNeural", "-6Hz", "+8%", "metal"),        # robo menino (padrao)
+    "menino2": ("pt-BR-AntonioNeural", "+60Hz", "+10%", "metal"),     # robo menino, timbre mais agudo
+    "robo": ("pt-BR-AntonioNeural", "+14Hz", "+4%", "metal"),
+    "robo_metalico": ("pt-BR-AntonioNeural", "+6Hz", "+4%", "metal_forte"),
+    "grave": ("pt-BR-AntonioNeural", "-14Hz", "+4%", None),
+    "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None),
 }
 
 
@@ -459,14 +461,22 @@ class Voice(QObject):
                 path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}.mp3")
 
                 async def go():
-                    tom, _ = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "robo"), (self.cfg.get("voz_tom", "+0Hz"), None))
-                    c = edge_tts.Communicate(text, self.cfg.get("voz", "pt-BR-AntonioNeural"),
-                                             rate=self.cfg.get("voz_velocidade", "+0%"), pitch=tom)
-                    await c.save(path)
+                    voz, tom, vel, _ = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
+                    ultimo = None
+                    # se a voz escolhida nao existir mais no servidor, tenta as parecidas
+                    for v in dict.fromkeys([voz, voz.replace("Neural", "MultilingualNeural"),
+                                            "pt-BR-FranciscaNeural", "pt-BR-AntonioNeural"]):
+                        try:
+                            await edge_tts.Communicate(text, v, rate=vel, pitch=tom).save(path)
+                            if os.path.getsize(path) > 0:
+                                return
+                        except Exception as e:
+                            ultimo = e
+                    raise ultimo or RuntimeError("sem audio")
 
                 asyncio.run(go())
                 if os.path.exists(path) and os.path.getsize(path) > 0:
-                    _, efeito = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "robo"), (None, None))
+                    efeito = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])[3]
                     if efeito:
                         try:
                             path = robotize_mp3(path, efeito)
@@ -687,10 +697,27 @@ class Updater(QObject):
     def _get(self, rel):
         import urllib.request
         base = self.cfg.get("url_atualizacao", "").rstrip("/") + "/"
-        req = urllib.request.Request(base + rel + f"?t={int(time.time())}",
-                                     headers={"User-Agent": "RoboBravus", "Cache-Control": "no-cache"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.read()
+        url = base + rel + f"?t={int(time.time())}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "RoboBravus", "Cache-Control": "no-cache"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.read()
+        except Exception as e:
+            if sys.platform != "win32":
+                raise
+            log.info("download pelo Python falhou (%s); tentando pelo Windows", e)
+            # plano B: baixa usando a internet do proprio Windows (resolve certificados antigos)
+            tmp = os.path.join(tempfile.gettempdir(), "robo_bravus_dl.tmp")
+            ps = ("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+                  f"Invoke-WebRequest -UseBasicParsing -Uri '{url}' -OutFile '{tmp}'")
+            r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                               capture_output=True, text=True, timeout=90, creationflags=0x08000000)
+            if r.returncode != 0 or not os.path.exists(tmp):
+                raise RuntimeError("sem acesso ao GitHub: " + (r.stderr or str(e))[-200:])
+            with open(tmp, "rb") as f:
+                data = f.read()
+            os.remove(tmp)
+            return data
 
     def _run(self, manual):
         try:
@@ -708,9 +735,9 @@ class Updater(QObject):
                 if not data:
                     raise RuntimeError("arquivo vazio: " + rel)
                 got[rel] = data
-            old_req = ""
+            old_req = b""
             try:
-                old_req = open(os.path.join(APP_DIR, "requirements.txt"), encoding="utf-8").read()
+                old_req = open(os.path.join(APP_DIR, "requirements.txt"), "rb").read()
             except Exception:
                 pass
             for rel, data in got.items():           # so substitui depois de baixar tudo
@@ -720,7 +747,7 @@ class Updater(QObject):
                 with open(tmp, "wb") as f:
                     f.write(data)
                 os.replace(tmp, dest)
-            if "requirements.txt" in got and got["requirements.txt"].decode("utf-8", "ignore") != old_req:
+            if "requirements.txt" in got and got["requirements.txt"].strip() != old_req.strip():
                 py = os.path.join(os.path.dirname(sys.executable), "python.exe")
                 if not os.path.exists(py):
                     py = sys.executable
@@ -1825,9 +1852,10 @@ class RobotWindow(QWidget):
             self.cfg.get("lembrete_agua_ativo", True))
         add(f"👂  Escuta contínua (diga \"{robo}\")", self.toggle_listen, self.cfg.get("escuta_continua"))
         vz = mn.addMenu("🔊  Voz")
-        for label, v in (("Robô (limpo)", "robo"), ("Robô metálico", "robo_metalico"),
+        for label, v in (("Robô menino", "menino"), ("Robô menino 2", "menino2"),
+                         ("Robô (limpo)", "robo"), ("Robô metálico", "robo_metalico"),
                          ("Realista grave", "grave"), ("Realista natural", "normal")):
-            add(label, lambda _=False, v=v: self.set_voice(v), self.cfg.get("efeito_voz", "robo") == v, menu=vz)
+            add(label, lambda _=False, v=v: self.set_voice(v), self.cfg.get("efeito_voz", "menino") == v, menu=vz)
         add("🔇  Silenciar voz", self.toggle_mute, self.cfg.get("mudo"))
         add("🎲  Movimentos aleatórios", self.toggle_random, self.cfg.get("comportamentos_aleatorios", True))
         sz = mn.addMenu("📏  Tamanho")
@@ -1854,7 +1882,9 @@ class RobotWindow(QWidget):
 
     def set_voice(self, v):
         self.cfg["efeito_voz"] = v; save_config(self.cfg)
-        self.say({"robo": f"Voz de robô ativada, {self.nome}!",
+        self.say({"menino": f"Oi, {self.nome}! Agora eu sou um robô menino!",
+                  "menino2": f"Oi, {self.nome}! Essa é minha outra voz de robô menino!",
+                  "robo": f"Voz de robô ativada, {self.nome}!",
                   "robo_metalico": f"Voz de robô metálico ativada, {self.nome}!",
                   "grave": f"Voz grave ativada, {self.nome}. Firme e direto ao ponto.",
                   "normal": f"Voz natural ativada, {self.nome}."}[v], "happy")
@@ -1898,7 +1928,7 @@ class RobotWindow(QWidget):
         elif manual and st == "atual":
             self.show_status(f"Já estou na versão mais nova ({info}).", 4)
         elif manual:
-            self.show_status("Não consegui procurar atualização agora.", 4)
+            self.show_status("Não consegui atualizar: " + info[:120], 8)
 
     def restart(self):
         self.cfg["posicao"] = [self.x(), self.y()]; save_config(self.cfg)
@@ -2082,6 +2112,8 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(QIcon(QPixmap.fromImage(render_icon(64))))
     cfg = load_config()
+    if not cfg.get("voz_menino_aplicada"):
+        cfg["efeito_voz"] = "menino"; cfg["voz_menino_aplicada"] = True
     save_config(cfg)
     w = RobotWindow(cfg)
     w.show()

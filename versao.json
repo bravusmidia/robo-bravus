@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.3",
-  "notas": "Ctrl+Alt+R liga o robo mesmo fechado.",
+  "versao": "1.4.4",
+  "notas": "Voz de robo menino; atualizador mais robusto no Windows.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
