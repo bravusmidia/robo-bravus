@@ -11,7 +11,8 @@ ATALHOS PARA LIGAR / DESLIGAR
 Na Area de Trabalho:
   "Ligar Robo Bravus" ........ abre o robo (se ja estiver aberto, faz ele aparecer)
   "Desligar Robo Bravus" ..... fecha o robo por completo
-No teclado (funciona com qualquer programa aberto):
+No teclado:
+  Ctrl + Alt + R ............. LIGA o robo (funciona mesmo com ele fechado)
   Ctrl + Alt + B ............. desativa / ativa o robo (some da tela, para de ouvir
                                e pausa o lembrete de agua; aperte de novo para voltar)
   Ctrl + Alt + F ............. fazer o robo te ouvir agora

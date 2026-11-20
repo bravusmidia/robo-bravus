@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.2",
-  "notas": "Voz sem tremido; novas vozes realistas (grave e natural).",
+  "versao": "1.4.3",
+  "notas": "Ctrl+Alt+R liga o robo mesmo fechado.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

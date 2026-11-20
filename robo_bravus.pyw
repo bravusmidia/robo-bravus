@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.2"
+VERSAO = "1.4.3"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -1388,6 +1388,14 @@ class RobotWindow(QWidget):
         self.upd_timer = QTimer(self); self.upd_timer.timeout.connect(self.auto_update)
         self.upd_timer.start(3 * 3600 * 1000)
         QTimer.singleShot(45000, self.auto_update)
+        if sys.platform == "win32" and self.cfg.get("atalhos_versao") != VERSAO:
+            def _atalhos():
+                try:
+                    make_shortcut()
+                    self.cfg["atalhos_versao"] = VERSAO; save_config(self.cfg)
+                except Exception as e:
+                    log.warning("atalhos: %s", e)
+            threading.Thread(target=_atalhos, daemon=True).start()
 
         self.menu = QMenu()
         self.menu.aboutToShow.connect(self.build_menu)
@@ -2018,15 +2026,21 @@ def make_shortcut():
     q = lambda s: s.replace("'", "''")
     ps = "$d=[Environment]::GetFolderPath('Desktop');$w=New-Object -ComObject WScript.Shell;"
     ps += "Remove-Item -ErrorAction SilentlyContinue ($d+'\\Robo Bravus.lnk');"
-    for nome, arg, desc in (("Ligar Robo Bravus", "", "Liga o Robo Bravus"),
-                            ("Desligar Robo Bravus", " --sair", "Desliga o Robo Bravus")):
-        ps += (f"$s=$w.CreateShortcut($d+'\\{nome}.lnk');"
+    # Ctrl+Alt+R no atalho do Windows: abre o robo mesmo quando ele esta fechado
+    ps += "$m=[Environment]::GetFolderPath('Programs')+'\\Robo Bravus';New-Item -ItemType Directory -Force $m | Out-Null;"
+    ps += "Remove-Item -ErrorAction SilentlyContinue ($m+'\\Ligar Robo Bravus.lnk');"
+    for pasta, nome, arg, desc, tecla in (("$d", "Ligar Robo Bravus", "", "Liga o Robo Bravus (Ctrl+Alt+R)", "CTRL+ALT+R"),
+                                         ("$d", "Desligar Robo Bravus", " --sair", "Desliga o Robo Bravus", ""),
+                                         ("$m", "Robo Bravus", "", "Robo Bravus - Bravus Midia", "")):
+        ps += (f"$s=$w.CreateShortcut({pasta}+'\\{nome}.lnk');"
                f"$s.TargetPath='{q(pythonw_exe())}';"
                f"$s.Arguments='\"{q(script)}\"{arg}';"
                f"$s.WorkingDirectory='{q(APP_DIR)}';"
                f"$s.IconLocation='{q(ICON_PATH)}';"
+               + (f"$s.Hotkey='{tecla}';" if tecla else "") +
                f"$s.Description='{desc}';$s.Save();")
-    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], check=False)
+    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], check=False,
+                   creationflags=0x08000000 if sys.platform == "win32" else 0)
 
 
 def install(autostart):
