@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.8",
-  "notas": "Responde tudo com IA (Gemini gratis ou Claude); menu Configurar IA.",
+  "versao": "1.5.0",
+  "notas": "Comandos no PC e no navegador; microfone mais sensivel; ativacao por Bravus melhor; voz de menino tambem offline.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

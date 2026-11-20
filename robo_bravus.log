@@ -6,3 +6,21 @@
 2026-11-20 18:40:41,245 INFO robo: Boa noite, Andrade! Eu sou o Bravus, seu assistente da Bravus Mídia. Vou ficar aqui flutuando do seu lado. Pra falar comigo, clique em mim ou diga Bravus. E de 30 em 30 minutos eu te lembro de beber água!
 2026-11-20 18:40:43,112 INFO robo: Agora são 18 horas e 40 minutos, Andrade.
 2026-11-20 18:40:49,178 WARNING IA falhou: HTTP 429: quota
+2026-11-20 18:46:35,003 INFO ouviu (continuo): Bravos que horas são
+2026-11-20 18:46:35,013 INFO ouviu (continuo): bravo abre o YouTube
+2026-11-20 18:46:35,013 INFO ouviu (continuo): brabus
+2026-11-20 18:46:35,014 INFO robo: Oi, Andrade! Pode falar.
+2026-11-20 18:46:35,014 INFO ouviu (continuo): olá tudo bem
+2026-11-20 18:46:35,014 INFO ouviu sem a palavra Bravus: olá tudo bem
+2026-11-20 18:46:35,018 INFO ouviu (continuo): Bra vus abre a calculadora
+2026-11-20 18:46:35,018 INFO ouviu (continuo): o Bravus pesquisa clima
+2026-11-20 18:46:35,022 INFO robo: Tem certeza que quer desligar o computador, Andrade? Diga: sim, pode desligar.
+2026-11-20 18:46:35,023 INFO robo: Ok, Andrade. O computador vai desligar em 30 segundos. Se mudar de ideia, diga: cancela o desligamento.
+2026-11-20 18:46:50,526 INFO robo: Claro, Andrade, vou procurar receitas de bolo.
+2026-11-20 18:46:50,609 WARNING escuta indisponivel: PortAudio library not found
+2026-11-20 18:46:51,688 INFO robo: Boa noite, Andrade! Eu sou o Bravus, seu assistente da Bravus Mídia. Vou ficar aqui flutuando do seu lado. Pra falar comigo, clique em mim ou diga Bravus. E de 30 em 30 minutos eu te lembro de beber água!
+2026-11-20 18:47:02,316 WARNING escuta indisponivel: PortAudio library not found
+2026-11-20 18:47:02,591 INFO robo: Voltei, Andrade!
+2026-11-20 18:47:03,241 INFO robo: Voltei, Andrade!
+2026-11-20 18:47:03,472 INFO robo: Boa noite, Andrade! Eu sou o Bravus, seu assistente da Bravus Mídia. Vou ficar aqui flutuando do seu lado. Pra falar comigo, clique em mim ou diga Bravus. E de 30 em 30 minutos eu te lembro de beber água!
+2026-11-20 18:47:03,569 INFO robo: Até logo, Andrade!

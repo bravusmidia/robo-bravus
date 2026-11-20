@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.8"
+VERSAO = "1.5.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -45,7 +45,8 @@ DEFAULTS = {
     "lembrete_agua_ativo": True,
     "lembrete_agua_min": 30,
     "escuta_continua": True,
-    "palavras_ativacao": ["bravus", "bravos", "robo", "robozinho"],
+    "palavras_ativacao": ["bravus", "bravos", "bravo", "brabus", "bravis", "bravu", "robo", "robozinho"],
+    "microfone": None,
     "voz": "pt-BR-AntonioNeural",
     "voz_velocidade": "+4%",
     "voz_tom": "+28Hz",
@@ -151,6 +152,109 @@ SITES = [
     ("google", "https://www.google.com"),
 ]
 
+PROGRAMAS = [  # (palavras faladas, comando do Windows)
+    (("bloco de notas", "notepad"), "notepad"),
+    (("calculadora",), "calc"),
+    (("explorador de arquivos", "meus arquivos", "explorador"), "explorer"),
+    (("paint",), "mspaint"),
+    (("configuracoes", "configuracao do windows"), "ms-settings:"),
+    (("gerenciador de tarefas",), "taskmgr"),
+    (("prompt de comando", "cmd"), "cmd"),
+    (("chrome", "google chrome", "navegador"), "chrome"),
+    (("edge",), "msedge"),
+    (("firefox",), "firefox"),
+    (("word",), "winword"),
+    (("excel",), "excel"),
+    (("powerpoint",), "powerpnt"),
+    (("spotify",), "spotify:"),
+    (("vs code", "visual studio code", "vscode"), "code"),
+    (("camera",), "microsoft.windows.camera:"),
+    (("ferramenta de captura", "recorte"), "ms-screenclip:"),
+    (("lixeira",), "shell:RecycleBinFolder"),
+]
+PASTAS = [
+    (("downloads", "download"), "Downloads"),
+    (("documentos",), "Documents"),
+    (("area de trabalho", "desktop"), "Desktop"),
+    (("imagens", "fotos"), "Pictures"),
+    (("musicas",), "Music"),
+    (("videos",), "Videos"),
+]
+TECLAS_PC = [  # (palavras, teclas, resposta)
+    (("nova aba", "abre uma aba", "abrir aba"), ["ctrl", "t"], "Nova aba aberta."),
+    (("fecha a aba", "fechar aba", "fecha essa aba", "fecha aba"), ["ctrl", "w"], "Aba fechada."),
+    (("proxima aba",), ["ctrl", "tab"], "Próxima aba."),
+    (("aba anterior",), ["ctrl", "shift", "tab"], "Aba anterior."),
+    (("reabre a aba", "reabrir aba"), ["ctrl", "shift", "t"], "Reabri a última aba."),
+    (("volta a pagina", "voltar pagina", "pagina anterior", "volta pagina"), ["alt", "left"], "Voltando."),
+    (("avanca a pagina", "proxima pagina", "avancar pagina"), ["alt", "right"], "Avançando."),
+    (("atualiza a pagina", "recarrega", "atualizar pagina"), ["f5"], "Atualizando a página."),
+    (("rola para baixo", "rola pra baixo", "desce a pagina", "desce"), ["pagedown"], None),
+    (("rola para cima", "rola pra cima", "sobe a pagina", "sobe"), ["pageup"], None),
+    (("tela cheia",), ["f11"], "Tela cheia."),
+    (("aumenta o zoom", "mais zoom"), ["ctrl", "="], None),
+    (("diminui o zoom", "menos zoom"), ["ctrl", "-"], None),
+    (("minimiza tudo", "mostra a area de trabalho", "minimizar tudo"), ["win", "d"], "Pronto, área de trabalho."),
+    (("fecha a janela", "fecha o programa", "fecha essa janela", "fechar janela"), ["alt", "f4"], "Fechando a janela."),
+    (("troca de janela", "proxima janela", "muda de janela"), ["alt", "tab"], None),
+    (("print", "captura de tela", "tira um print", "printa a tela"), ["win", "shift", "s"], "Selecione a área do print."),
+    (("pausa a musica", "pausa o video", "pausar", "despausa", "continua a musica", "play"), ["playpause"], None),
+    (("proxima musica", "pula a musica", "proxima faixa"), ["nexttrack"], None),
+    (("musica anterior", "faixa anterior"), ["prevtrack"], None),
+    (("salva o arquivo", "salvar arquivo", "salva isso"), ["ctrl", "s"], "Salvo."),
+    (("copia isso", "copiar"), ["ctrl", "c"], "Copiado."),
+    (("cola aqui", "colar", "cola isso"), ["ctrl", "v"], "Colado."),
+    (("desfaz", "desfazer"), ["ctrl", "z"], "Desfeito."),
+    (("seleciona tudo", "selecionar tudo"), ["ctrl", "a"], None),
+]
+
+VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B, "tab": 0x09, "left": 0x25, "right": 0x27,
+      "f4": 0x73, "f5": 0x74, "f11": 0x7A, "pagedown": 0x22, "pageup": 0x21, "=": 0xBB, "-": 0xBD,
+      "playpause": 0xB3, "nexttrack": 0xB0, "prevtrack": 0xB1, "volup": 0xAF, "voldown": 0xAE,
+      "mute": 0xAD, "enter": 0x0D}
+EXT = {"left", "right", "pagedown", "pageup", "win", "playpause", "nexttrack", "prevtrack", "volup", "voldown", "mute"}
+
+
+def pc_keys(keys, times=1):
+    """Aperta uma combinacao de teclas no Windows (vai para a janela que estiver na frente)."""
+    if sys.platform != "win32":
+        log.info("teclas %s (so no Windows)", keys); return
+    import ctypes
+    u = ctypes.windll.user32
+    codes = [(VK[k] if k in VK else ord(k.upper()), k in EXT) for k in keys]
+    for _ in range(times):
+        for c, e in codes:
+            u.keybd_event(c, 0, 1 if e else 0, 0)
+        for c, e in reversed(codes):
+            u.keybd_event(c, 0, (1 if e else 0) | 2, 0)
+        time.sleep(0.03)
+
+
+def pc_open(target):
+    if sys.platform != "win32":
+        log.info("abrir %s (so no Windows)", target); return
+    try:
+        os.startfile(target)
+    except Exception:
+        subprocess.Popen(["cmd", "/c", "start", "", target], creationflags=0x08000000)
+
+
+def pc_folder(name):
+    pc_open(os.path.join(os.path.expanduser("~"), name))
+
+
+def pc_type(text):
+    """Escreve o texto na janela da frente (usa a area de transferencia para aceitar acentos)."""
+    QApplication.clipboard().setText(text)
+    QTimer.singleShot(150, lambda: pc_keys(["ctrl", "v"]))
+
+
+def pc_lock():
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.user32.LockWorkStation()
+
+
 NUM = {"um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5, "seis": 6,
        "sete": 7, "oito": 8, "nove": 9, "dez": 10, "quinze": 15, "vinte": 20, "trinta": 30,
        "quarenta": 40, "cinquenta": 50, "meia": 30}
@@ -213,11 +317,53 @@ class Brain:
         if has("que dia", "data de hoje", "dia e hoje", "que data"):
             return r(f"Hoje é {DIAS[now.weekday()]}, {now.day} de {MESES[now.month - 1]} de {now.year}, {nome}.")
 
-        # Abrir sites
-        if has("abre", "abrir", "abra", "abri", "entra no", "entrar no"):
+        # Confirmacoes pendentes (ex.: desligar o PC)
+        # ---- Comandos no computador ----
+        abrir = has("abre", "abrir", "abra", "abri", "entra no", "entrar no", "inicia", "executa")
+        if abrir:
             for key, url in SITES:
-                if key in n:
+                if key in n and key not in ("google", "drive") or (key in ("google", "drive") and re.search(r"\b" + key + r"\b", n)):
+                    if key == "google" and "chrome" in n:
+                        continue
                     return r(f"Abrindo {key}, {nome}.", "point", open_url=url)
+            for words, cmd in PROGRAMAS:
+                if any(w in n for w in words):
+                    return r(f"Abrindo {words[0]}, {nome}.", "point", pc=("open", cmd))
+            if "pasta" in n:
+                for words, pasta in PASTAS:
+                    if any(w in n for w in words):
+                        return r(f"Abrindo a pasta {words[0]}.", "point", pc=("folder", pasta))
+            m = re.search(r"\bsite (?:do |da |de )?([\w\.-]+)", n) or re.search(r"\b([\w-]+\.(?:com|com\.br|net|org|br|io|ai)(?:\.br)?)\b", n)
+            if m:
+                dom = m.group(1).strip(".")
+                if "." not in dom:
+                    dom += ".com.br"
+                return r(f"Abrindo {dom}, {nome}.", "point", open_url="https://" + dom)
+        for words, pasta in PASTAS:
+            if any(("pasta " + w) in n or ("pasta de " + w) in n for w in words):
+                return r(f"Abrindo a pasta {words[0]}.", "point", pc=("folder", pasta))
+        m = re.search(r"^(?:digita|digite|escreve|escreva|escrever)(?: ai| aí| isso)?:? (.+)$", text.strip(), re.I)
+        if m:
+            return r("Escrevendo.", None, pc=("type", m.group(1)), quiet=True)
+        if has("aumenta o volume", "aumentar o volume", "sobe o volume", "mais volume", "volume mais alto"):
+            return r("Volume aumentado.", None, pc=("keys", ["volup"], 5))
+        if has("diminui o volume", "diminuir o volume", "abaixa o volume", "baixa o volume", "menos volume"):
+            return r("Volume diminuído.", None, pc=("keys", ["voldown"], 5))
+        if has("tira o som", "muta o som", "silencia o computador", "volta o som"):
+            return r("Pronto.", None, pc=("keys", ["mute"], 1))
+        if has("bloqueia o computador", "bloquear o computador", "bloqueia o pc", "bloqueia a tela"):
+            return r(f"Bloqueando o computador. Até já, {nome}!", "wave", pc=("lock",))
+        if has("desliga o computador", "desligar o computador", "desliga o pc", "desligar o pc"):
+            return r(f"Tem certeza que quer desligar o computador, {nome}? Diga: sim, pode desligar.", "think",
+                     confirm=("shutdown",))
+        if has("reinicia o computador", "reiniciar o computador", "reinicia o pc"):
+            return r(f"Tem certeza que quer reiniciar o computador, {nome}? Diga: sim, pode reiniciar.", "think",
+                     confirm=("restart",))
+        if has("cancela o desligamento", "nao desliga", "cancelar desligamento"):
+            return r("Cancelado! O computador não vai desligar.", "happy", pc=("cancel_shutdown",))
+        for words, keys, resp in TECLAS_PC:
+            if any(re.search(r"\b" + re.escape(w) + r"\b", n) for w in words):
+                return r(resp or "Ok.", None, pc=("keys", keys, 1), quiet=resp is None)
 
         # Pesquisas
         m = re.search(r"(?:pesquis\w*|procur\w*|busc\w*|toca|tocar|coloca)(?: no google| no youtube)?(?: sobre| por)? (.+)", n)
@@ -356,7 +502,10 @@ class AIWorker(QObject):
                 f"{agora.day}/{agora.month}/{agora.year}, {agora.hour}h{agora.minute:02d}. "
                 f"Responda a qualquer pergunta, sobre qualquer assunto, sempre em português do Brasil, e chame-o de {nome}. "
                 f"Seja direto: no máximo 3 frases curtas, porque a resposta será falada em voz alta. "
-                f"Não use emojis, listas, asteriscos nem markdown.")
+                f"Não use emojis, listas, asteriscos nem markdown. "
+                f"Você controla o navegador do computador: se ele pedir para abrir, mostrar, tocar ou procurar algo na internet, "
+                f"responda curto e coloque no final UMA destas marcações: [SITE:https://endereco] para abrir um site, "
+                f"[PESQUISAR:termo] para pesquisar no Google ou [YOUTUBE:termo] para procurar no YouTube.")
 
     def _gemini(self, text):
         key = self.cfg["ia_chave_gemini"].strip()
@@ -422,46 +571,73 @@ class AIWorker(QObject):
 # Efeito de voz robotica
 # ----------------------------------------------------------------------------
 # estilo: (voz do Edge, tom, velocidade, efeito)   efeito: None | "metal" | "metal_forte"
+# estilo: (voz online do Edge, tom, velocidade, efeito, aceleracao da voz do Windows)
 VOZ_ESTILOS = {
-    "menino": ("pt-BR-ThalitaNeural", "-6Hz", "+8%", "metal"),   # robo menino (padrao)
-    "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None),     # voz natural
+    "menino": ("pt-BR-ThalitaNeural", "-6Hz", "+8%", "metal", 1.28),   # robo menino (padrao)
+    "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None, 1.0),       # voz natural
 }
 
 
-def robotize_mp3(mp3_path, effect):
-    """Efeito metalico sem tremido: ressonancias curtas (eco de lata), sem modulacao de volume."""
-    import miniaudio, wave
+def process_voice(x, rate, effect, speed, out_path):
+    """speed > 1 deixa a voz mais aguda e jovem (voz de menino); effect adiciona o metal de robo."""
+    import wave
+    x = [float(v) for v in x]
+    if speed and abs(speed - 1.0) > 0.01:
+        n = int(len(x) / speed)
+        y = [0.0] * n
+        for i in range(n):
+            p = i * speed
+            j = int(p)
+            f = p - j
+            a = x[j] if j < len(x) else 0.0
+            b = x[j + 1] if j + 1 < len(x) else a
+            y[i] = a + (b - a) * f
+        x = y
+    out = x
+    if effect:
+        if effect == "metal_forte":
+            taps, fb_d, fb = ((0.0031, 0.55), (0.0069, 0.4), (0.0113, 0.25)), 0.0045, 0.5
+        else:
+            taps, fb_d, fb = ((0.0029, 0.35), (0.0061, 0.2)), 0.0052, 0.28
+        taps = [(max(1, int(d * rate)), g) for d, g in taps]
+        fd = max(1, int(fb_d * rate))
+        out = [0.0] * len(x)
+        for i in range(len(x)):
+            v = x[i]
+            for d, g in taps:
+                if i >= d:
+                    v += g * x[i - d]
+            if i >= fd:
+                v += fb * out[i - fd]
+            out[i] = v
+    peak = max(1.0, max((abs(v) for v in out), default=1.0))
+    g = 30000.0 / peak
+    data = array("h", (int(v * g) for v in out))
+    with wave.open(out_path, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+        w.writeframes(data.tobytes())
+    return out_path
+
+
+def robotize_mp3(mp3_path, effect, speed=1.0):
+    import miniaudio
     rate = 24000
     dec = miniaudio.decode_file(mp3_path, output_format=miniaudio.SampleFormat.SIGNED16,
                                 nchannels=1, sample_rate=rate)
-    x = dec.samples
-    if effect == "metal_forte":
-        taps, fb_d, fb = ((0.0031, 0.55), (0.0069, 0.4), (0.0113, 0.25)), 0.0045, 0.5
-    else:
-        taps, fb_d, fb = ((0.0029, 0.35), (0.0061, 0.2)), 0.0052, 0.28
-    taps = [(max(1, int(d * rate)), g) for d, g in taps]
-    fd = max(1, int(fb_d * rate))
-    n = len(x)
-    out = [0.0] * n
-    peak = 1.0
-    for i in range(n):
-        y = float(x[i])
-        for d, g in taps:
-            if i >= d:
-                y += g * x[i - d]
-        if i >= fd:
-            y += fb * out[i - fd]
-        out[i] = y
-        a = y if y > 0 else -y
-        if a > peak:
-            peak = a
-    g = 30000.0 / peak
-    data = array("h", (int(v * g) for v in out))
-    wav = mp3_path[:-4] + ".wav"
-    with wave.open(wav, "wb") as w:
-        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
-        w.writeframes(data.tobytes())
-    return wav
+    return process_voice(dec.samples, rate, effect, speed, mp3_path[:-4] + ".wav")
+
+
+def robotize_wav(wav_path, effect, speed=1.0):
+    import wave
+    with wave.open(wav_path, "rb") as w:
+        rate, ch, sw = w.getframerate(), w.getnchannels(), w.getsampwidth()
+        raw = w.readframes(w.getnframes())
+    if sw != 2:
+        raise RuntimeError("wav nao suportado")
+    x = array("h", raw)
+    if ch == 2:
+        x = x[::2]
+    return process_voice(x, rate, effect, speed, wav_path[:-4] + "_robo.wav")
 
 
 # ----------------------------------------------------------------------------
@@ -527,7 +703,7 @@ class Voice(QObject):
         threading.Thread(target=self._generate, args=(rid, text), daemon=True).start()
 
     def _cleanup(self):
-        for f in glob.glob(os.path.join(self.tmpdir, "fala_*.*")):
+        for f in glob.glob(os.path.join(self.tmpdir, "fala_*")):
             try:
                 if time.time() - os.path.getmtime(f) > 120:
                     os.remove(f)
@@ -543,7 +719,7 @@ class Voice(QObject):
                 path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}.mp3")
 
                 async def go():
-                    voz, tom, vel, _ = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
+                    voz, tom, vel, _, _ = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
                     ultimo = None
                     # se a voz escolhida nao existir mais no servidor, tenta as parecidas
                     for v in dict.fromkeys([voz, voz.replace("Neural", "MultilingualNeural"),
@@ -559,6 +735,7 @@ class Voice(QObject):
                 asyncio.run(go())
                 if os.path.exists(path) and os.path.getsize(path) > 0:
                     efeito = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])[3]
+                    log.info("voz: online (%s)", self.cfg.get("efeito_voz"))
                     if efeito:
                         try:
                             path = robotize_mp3(path, efeito)
@@ -567,7 +744,7 @@ class Voice(QObject):
                     self._file_ready.emit(rid, path)
                     return
             except Exception as e:
-                log.info("edge-tts indisponivel, usando voz do Windows: %s", e)
+                log.warning("voz online falhou, usando voz do Windows: %s", e)
         self._speak_offline(rid, text)
 
     def _speak_offline(self, rid, text):
@@ -579,9 +756,22 @@ class Voice(QObject):
                 if "pt-br" in tag or "pt_br" in tag or "portug" in tag or "maria" in tag or "daniel" in tag:
                     eng.setProperty("voice", v.id)
                     break
-            eng.setProperty("rate", 185)
+            eng.setProperty("rate", 175)
             if rid != self.req:
                 return
+            _, _, _, efeito, speed = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])
+            if self.player is not None and not getattr(self, "_player_broken", False):
+                try:   # grava, transforma em voz de menino e toca no player
+                    wav = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}.wav")
+                    eng.save_to_file(text, wav)
+                    eng.runAndWait()
+                    if os.path.exists(wav) and os.path.getsize(wav) > 100:
+                        out = robotize_wav(wav, efeito, speed) if (efeito or speed != 1.0) else wav
+                        log.info("voz: Windows (offline) com efeito %s", self.cfg.get("efeito_voz"))
+                        self._file_ready.emit(rid, out)
+                        return
+                except Exception as e:
+                    log.info("voz do Windows sem efeito: %s", e)
             self._fallback_state.emit(rid, True)
             eng.say(text)
             eng.runAndWait()
@@ -609,6 +799,7 @@ class Voice(QObject):
 
     def _on_error(self, *a):
         log.warning("erro no player: %s", a)
+        self._player_broken = True
         rid = self.req
         self.pending = True
         threading.Thread(target=self._speak_offline, args=(rid, self._last_text), daemon=True).start()
@@ -620,8 +811,10 @@ class Voice(QObject):
 class Listener(QObject):
     heard = Signal(str, bool)
     status = Signal(str)
+    level = Signal(float)     # 0..1, para mostrar que esta ouvindo
 
     RATE, BLOCK = 16000, 480  # blocos de 30 ms
+    MIN_THR = 160.0           # sensibilidade (menor = ouve mais baixo)
 
     def __init__(self, cfg, is_busy):
         super().__init__()
@@ -645,14 +838,22 @@ class Listener(QObject):
 
     def _open(self):
         import sounddevice as sd
-        self.stream = sd.RawInputStream(samplerate=self.RATE, channels=1, dtype="int16", blocksize=self.BLOCK)
+        dev = self.cfg.get("microfone")
+        try:
+            log.info("microfones: %s", [(i, d["name"]) for i, d in enumerate(sd.query_devices())
+                                         if d["max_input_channels"] > 0])
+        except Exception:
+            pass
+        self.stream = sd.RawInputStream(samplerate=self.RATE, channels=1, dtype="int16", blocksize=self.BLOCK,
+                                        device=dev if dev not in ("", None) else None)
         self.stream.start()
         vals = []
         for _ in range(20):
             data, _ = self.stream.read(self.BLOCK)
             vals.append(self.rms(bytes(data)))
         self.ambient = sum(vals) / len(vals)
-        self.threshold = max(380.0, self.ambient * 3.0)
+        self.threshold = max(self.MIN_THR, self.ambient * 2.5)
+        log.info("microfone aberto (aparelho %s); ruido %.0f, limite %.0f", dev, self.ambient, self.threshold)
 
     def _close(self):
         if self.stream is not None:
@@ -675,6 +876,9 @@ class Listener(QObject):
             data, _ = self.stream.read(self.BLOCK)
             data = bytes(data)
             lvl = self.rms(data)
+            self._lv = getattr(self, "_lv", 0) + 1
+            if self._lv % 3 == 0:
+                self.level.emit(min(1.0, lvl / 3000.0))
             if not speaking:
                 if lvl > self.threshold:
                     speaking = True
@@ -683,7 +887,7 @@ class Listener(QObject):
                 else:
                     pre.append(data)
                     self.ambient = self.ambient * 0.97 + lvl * 0.03
-                    self.threshold = max(380.0, self.ambient * 3.0)
+                    self.threshold = max(self.MIN_THR, self.ambient * 2.5)
                     if time.monotonic() - start > limit:
                         return None
             else:
@@ -1389,10 +1593,12 @@ class SpriteRobot(RobotModel):
             sm = QPainterPath(); sm.moveTo(-7, -1); sm.quadTo(0, 5, 7, -1)
             self.glow_path(p, sm, GLOW, fill=False, width=2.2, strength=0.7)
         p.restore()
-        if self.listening:
+        mic = getattr(self, "mic", 0.0)
+        if self.listening or mic > 0.05:
             for c in (P(68, 240), P(452, 200)):
                 ring = QPainterPath(); ring.addEllipse(c, 30, 40)
-                self.glow_path(p, ring, GLOW, fill=False, width=5, strength=1.3 if self.listening else 0.6)
+                self.glow_path(p, ring, GLOW, fill=False, width=5,
+                               strength=min(1.6, (1.0 if self.listening else 0.3) + mic * 2.5))
         p.restore()
         if not head_only:
             # braco direito por cima (com copo d'agua)
@@ -1472,6 +1678,9 @@ class RobotWindow(QWidget):
         self.listener = Listener(cfg, self.voice.busy)
         self.listener.heard.connect(self.on_heard)
         self.listener.status.connect(self.on_listen_status)
+        self.listener.level.connect(self.on_mic_level)
+        self.mic_level = 0.0
+        self.mic_test_until = 0.0
 
         self.bubble_text, self.bubble_until, self.bubble_kind = "", 0.0, "say"
         self.action, self.action_until = None, 0.0
@@ -1675,6 +1884,8 @@ class RobotWindow(QWidget):
             fx.add("zzz")
         m.fx = fx
         m.listening = self.listening
+        self.mic_level *= 0.85
+        m.mic = self.mic_level
 
         # piscar
         if t > self.next_blink:
@@ -1812,6 +2023,42 @@ class RobotWindow(QWidget):
         self.listening = False
         self.bubble_until = 0
 
+    def on_mic_level(self, v):
+        self.mic_level = max(v, self.mic_level * 0.6)
+        self.m.mic = self.mic_level
+        if self.m.t < self.mic_test_until:
+            barras = int(self.mic_level * 20)
+            self.show_status("Nível do microfone:  " + "▮" * barras + "▯" * (20 - barras)
+                             + ("\nEstou te ouvindo bem!" if self.mic_level > 0.08 else "\nFale algo..."), 1.0)
+
+    def test_mic(self):
+        if not self.listener.ok:
+            self.show_status("A escuta não está instalada. Rode o atualizador de novo.", 6); return
+        self.mic_test_until = self.m.t + 12
+        self.listener.force = True
+        self.listening = True
+        self.show_status("Fale algo para testar o microfone...", 3)
+
+    def mic_menu(self, menu):
+        try:
+            import sounddevice as sd
+            devs = [(i, d["name"]) for i, d in enumerate(sd.query_devices())
+                    if d["max_input_channels"] > 0 and sd.query_hostapis(d["hostapi"])["name"] == "MME"]
+        except Exception:
+            devs = []
+        atual = self.cfg.get("microfone")
+        a = QAction("Padrão do Windows", menu); a.setCheckable(True); a.setChecked(atual in (None, ""))
+        a.triggered.connect(lambda: self.set_mic(None)); menu.addAction(a)
+        for i, nome in devs:
+            a = QAction(nome[:45], menu); a.setCheckable(True); a.setChecked(atual == i)
+            a.triggered.connect(lambda _=False, i=i: self.set_mic(i)); menu.addAction(a)
+
+    def set_mic(self, i):
+        self.cfg["microfone"] = i; save_config(self.cfg)
+        self.listener._close()
+        self.show_status("Microfone trocado. Vamos testar!", 2)
+        QTimer.singleShot(1500, self.test_mic)
+
     def on_listen_status(self, st):
         msgs = {
             "nada": "Não consegui ouvir. Clique em mim e fale de novo.",
@@ -1831,15 +2078,22 @@ class RobotWindow(QWidget):
     def on_heard(self, text, forced):
         log.info("ouviu (%s): %s", "clique" if forced else "continuo", text)
         if not forced:
+            import difflib
             n = norm(text)
-            hit = None
-            for w in self.cfg.get("palavras_ativacao", []):
-                mm = re.search(r"\b" + re.escape(norm(w)) + r"\b", n)
-                if mm and (hit is None or mm.start() < hit.start()):
-                    hit = mm
-            if not hit:
+            words = re.findall(r"[\w']+", n)
+            wake = [norm(w) for w in self.cfg.get("palavras_ativacao", [])] + ["bravus"]
+            idx = None
+            for i, w in enumerate(words):
+                cand = [w] + ([w + words[i + 1]] if i + 1 < len(words) else [])
+                if any(c in wake or difflib.SequenceMatcher(None, c, "bravus").ratio() >= 0.72 for c in cand):
+                    idx = i
+                    break
+            if idx is None:
+                log.info("ouviu sem a palavra Bravus: %s", text)
                 return
-            rest = n[hit.end():].strip(" ,.!?")
+            rest = " ".join(words[idx + 1:]).strip()
+            if rest and difflib.SequenceMatcher(None, words[idx] + (words[idx + 1] if idx + 1 < len(words) else ""), "bravus").ratio() > 0.9:
+                rest = " ".join(words[idx + 2:]).strip()
             if len(rest) < 2:
                 self.listen_after_speech = True
                 self.say(f"Oi, {self.nome}! Pode falar.", expr="happy")
@@ -1852,6 +2106,18 @@ class RobotWindow(QWidget):
     def handle_text(self, text):
         self.last_interaction = time.monotonic()
         self.sleeping = False
+        pend = getattr(self, "pending_confirm", None)
+        self.pending_confirm = None
+        if pend and time.monotonic() - pend[1] < 40:
+            nn = norm(text)
+            if re.search(r"\b(sim|pode|confirmo|isso)\b", nn) and not re.search(r"\bnao\b", nn):
+                acao = pend[0][0]
+                self.say(f"Ok, {self.nome}. O computador vai {'desligar' if acao == 'shutdown' else 'reiniciar'} em 30 segundos. "
+                         f"Se mudar de ideia, diga: cancela o desligamento.", "wave")
+                self.run_pc((acao,))
+                return
+            self.say(f"Tudo bem, {self.nome}, não vou fazer nada.", "happy")
+            return
         res = self.brain.respond(text)
         if res is not None and res.get("chat") and self.ai.available() and len(text.split()) > 3:
             res = None   # pergunta de verdade: deixa a IA responder
@@ -1878,7 +2144,9 @@ class RobotWindow(QWidget):
             self.cfg["lembrete_agua_ativo"] = res["water"]; save_config(self.cfg); self.reset_water()
         if "listen" in res:
             self.cfg["escuta_continua"] = res["listen"]; save_config(self.cfg)
-        if res.get("mute") is True:
+        if res.get("quiet"):
+            self.show_status(res["reply"], 2)
+        elif res.get("mute") is True:
             self.say(res["reply"], res.get("action"))
             self.cfg["mudo"] = True; save_config(self.cfg)
         else:
@@ -1887,8 +2155,48 @@ class RobotWindow(QWidget):
             self.say(res["reply"], res.get("action"))
         if res.get("open_url"):
             QTimer.singleShot(900, lambda u=res["open_url"]: webbrowser.open(u))
+        if res.get("pc"):
+            QTimer.singleShot(500, lambda c=res["pc"]: self.run_pc(c))
+        if res.get("confirm"):
+            self.pending_confirm = (res["confirm"], time.monotonic())
+            self.listen_after_speech = True
+
+    def run_pc(self, c):
+        try:
+            kind = c[0]
+            if kind == "keys":
+                pc_keys(c[1], c[2] if len(c) > 2 else 1)
+            elif kind == "open":
+                pc_open(c[1])
+            elif kind == "folder":
+                pc_folder(c[1])
+            elif kind == "type":
+                pc_type(c[1])
+            elif kind == "lock":
+                QTimer.singleShot(1500, pc_lock)
+            elif kind == "shutdown" and sys.platform == "win32":
+                subprocess.Popen(["shutdown", "/s", "/t", "30"], creationflags=0x08000000)
+            elif kind == "restart" and sys.platform == "win32":
+                subprocess.Popen(["shutdown", "/r", "/t", "30"], creationflags=0x08000000)
+            elif kind == "cancel_shutdown" and sys.platform == "win32":
+                subprocess.Popen(["shutdown", "/a"], creationflags=0x08000000)
+            log.info("comando no PC: %s", c)
+        except Exception as e:
+            log.warning("comando falhou %s: %s", c, e)
+            self.show_status(f"Não consegui fazer isso: {e}", 5)
 
     def on_ai(self, text):
+        import urllib.parse
+        for tipo, valor in re.findall(r"\[(SITE|PESQUISAR|YOUTUBE):\s*([^\]]+)\]", text, re.I):
+            tipo, valor = tipo.upper(), valor.strip()
+            if tipo == "SITE" and re.match(r"https?://", valor):
+                url = valor
+            elif tipo == "YOUTUBE":
+                url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(valor)
+            else:
+                url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(valor)
+            QTimer.singleShot(900, lambda u=url: webbrowser.open(u))
+        text = re.sub(r"\[(SITE|PESQUISAR|YOUTUBE):[^\]]*\]", "", text, flags=re.I).strip()
         self.action = None
         self.bubble_kind = "say"
         self.say(text, "talk" if len(text) > 80 else "present")
@@ -1962,6 +2270,10 @@ class RobotWindow(QWidget):
         add(f"💧  Lembrete de água ({int(self.cfg.get('lembrete_agua_min', 30))} min)", self.toggle_water,
             self.cfg.get("lembrete_agua_ativo", True))
         add(f"👂  Escuta contínua (diga \"{robo}\")", self.toggle_listen, self.cfg.get("escuta_continua"))
+        mic = mn.addMenu("🎙️  Microfone")
+        add("Testar microfone", self.test_mic, menu=mic)
+        mic.addSeparator()
+        self.mic_menu(mic)
         vz = mn.addMenu("🔊  Voz")
         for label, v in (("Robô menino", "menino"), ("Natural", "normal")):
             add(label, lambda _=False, v=v: self.set_voice(v), self.cfg.get("efeito_voz", "menino") == v, menu=vz)
@@ -1975,6 +2287,7 @@ class RobotWindow(QWidget):
         mn.addSeparator()
         add("🧠  Configurar IA (responder tudo)" + ("  ✓" if self.ai.available() else ""), self.config_ai)
         add(f"🔄  Procurar atualização (v{VERSAO})", self.manual_update)
+        add("📋  Ver registro (para suporte)", lambda: pc_open(LOG_PATH))
         add("⚙️  Abrir configurações", lambda: os.startfile(CONFIG_PATH) if sys.platform == "win32" else None)
         add("🙈  Desativar (Ctrl+Alt+B)", lambda: self.set_active(False))
         add("❌  Sair", self.quit_app)

@@ -45,6 +45,16 @@ FRASES QUE ELE ENTENDE (exemplos)
   "Bravus, senta / levanta / coca a cabeca / pensa / vai dormir"
   "Bravus, fica quieto" (so texto)   "Bravus, pode falar" (volta a voz)
 
+COMANDOS NO COMPUTADOR (diga "Bravus, ...")
+  abre a calculadora / bloco de notas / chrome / word / excel / spotify / configuracoes
+  abre a pasta downloads / documentos / area de trabalho / imagens
+  abre o site mercadolivre  /  abre o youtube  /  pesquisa ...  /  toca ... no youtube
+  nova aba / fecha a aba / proxima aba / volta a pagina / atualiza a pagina / rola pra baixo
+  aumenta o volume / diminui o volume / pausa a musica / proxima musica
+  digita ... (escreve o texto na janela aberta) / salva o arquivo / copia / cola / desfaz
+  minimiza tudo / fecha a janela / tira um print / bloqueia o computador
+  desliga ou reinicia o computador (ele pede confirmacao) / cancela o desligamento
+
 DEIXAR ELE RESPONDER TUDO (IA)
 1. Crie uma chave gratis do Gemini em https://aistudio.google.com/apikey
    (ou uma chave paga do Claude em https://console.anthropic.com)
