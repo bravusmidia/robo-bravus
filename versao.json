@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.1",
-  "notas": "Mais leve: menos quadros por segundo quando parado e imagens pre-redimensionadas.",
+  "versao": "1.4.2",
+  "notas": "Voz sem tremido; novas vozes realistas (grave e natural).",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

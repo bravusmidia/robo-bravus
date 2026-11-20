@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.1"
+VERSAO = "1.4.2"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -47,7 +47,7 @@ DEFAULTS = {
     "escuta_continua": True,
     "palavras_ativacao": ["bravus", "bravos", "robo", "robozinho"],
     "voz": "pt-BR-AntonioNeural",
-    "voz_velocidade": "+6%",
+    "voz_velocidade": "+4%",
     "voz_tom": "+28Hz",
     "efeito_voz": "robo",
     "mudo": False,
@@ -335,37 +335,42 @@ class AIWorker(QObject):
 # ----------------------------------------------------------------------------
 # Efeito de voz robotica
 # ----------------------------------------------------------------------------
+# estilo: (tom da voz, efeito)  efeito: None | "metal" | "metal_forte"
 VOZ_ESTILOS = {
-    # nome: (freq. modulacao Hz, mistura do efeito, atraso metalico s, realimentacao)
-    "robo": (60.0, 0.45, 0.0055, 0.45),
-    "robo_metalico": (38.0, 0.75, 0.0085, 0.6),
+    "robo": ("+14Hz", "metal"),            # robo limpo, sem tremer
+    "robo_metalico": ("+6Hz", "metal_forte"),
+    "grave": ("-14Hz", None),              # voz realista mais grossa e firme
+    "normal": ("+0Hz", None),              # voz realista natural
 }
 
 
-def robotize_mp3(mp3_path, style):
-    """Decodifica o MP3, aplica efeito de robo e salva WAV. Retorna o caminho do WAV."""
+def robotize_mp3(mp3_path, effect):
+    """Efeito metalico sem tremido: ressonancias curtas (eco de lata), sem modulacao de volume."""
     import miniaudio, wave
     rate = 24000
     dec = miniaudio.decode_file(mp3_path, output_format=miniaudio.SampleFormat.SIGNED16,
                                 nchannels=1, sample_rate=rate)
     x = dec.samples
-    f, wet, delay, fb = VOZ_ESTILOS.get(style, VOZ_ESTILOS["robo"])
-    period = int(round(rate / f))
-    table = [math.sin(2 * math.pi * i / period) for i in range(period)]
-    d = max(1, int(delay * rate))
-    dry = 1.0 - wet
-    out = [0.0] * len(x)
+    if effect == "metal_forte":
+        taps, fb_d, fb = ((0.0031, 0.55), (0.0069, 0.4), (0.0113, 0.25)), 0.0045, 0.5
+    else:
+        taps, fb_d, fb = ((0.0029, 0.35), (0.0061, 0.2)), 0.0052, 0.28
+    taps = [(max(1, int(d * rate)), g) for d, g in taps]
+    fd = max(1, int(fb_d * rate))
+    n = len(x)
+    out = [0.0] * n
     peak = 1.0
-    for i in range(len(x)):
-        v = x[i]
-        y = v * dry + v * table[i % period] * wet
-        if i >= d:
-            y += fb * out[i - d]
+    for i in range(n):
+        y = float(x[i])
+        for d, g in taps:
+            if i >= d:
+                y += g * x[i - d]
+        if i >= fd:
+            y += fb * out[i - fd]
         out[i] = y
-        if y > peak:
-            peak = y
-        elif -y > peak:
-            peak = -y
+        a = y if y > 0 else -y
+        if a > peak:
+            peak = a
     g = 30000.0 / peak
     data = array("h", (int(v * g) for v in out))
     wav = mp3_path[:-4] + ".wav"
@@ -454,17 +459,17 @@ class Voice(QObject):
                 path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}.mp3")
 
                 async def go():
+                    tom, _ = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "robo"), (self.cfg.get("voz_tom", "+0Hz"), None))
                     c = edge_tts.Communicate(text, self.cfg.get("voz", "pt-BR-AntonioNeural"),
-                                             rate=self.cfg.get("voz_velocidade", "+0%"),
-                                             pitch=self.cfg.get("voz_tom", "+0Hz"))
+                                             rate=self.cfg.get("voz_velocidade", "+0%"), pitch=tom)
                     await c.save(path)
 
                 asyncio.run(go())
                 if os.path.exists(path) and os.path.getsize(path) > 0:
-                    style = self.cfg.get("efeito_voz", "robo")
-                    if style in VOZ_ESTILOS:
+                    _, efeito = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "robo"), (None, None))
+                    if efeito:
                         try:
-                            path = robotize_mp3(path, style)
+                            path = robotize_mp3(path, efeito)
                         except Exception as e:
                             log.info("efeito robo indisponivel: %s", e)
                     self._file_ready.emit(rid, path)
@@ -1812,7 +1817,8 @@ class RobotWindow(QWidget):
             self.cfg.get("lembrete_agua_ativo", True))
         add(f"👂  Escuta contínua (diga \"{robo}\")", self.toggle_listen, self.cfg.get("escuta_continua"))
         vz = mn.addMenu("🔊  Voz")
-        for label, v in (("Robô", "robo"), ("Robô metálico", "robo_metalico"), ("Natural", "normal")):
+        for label, v in (("Robô (limpo)", "robo"), ("Robô metálico", "robo_metalico"),
+                         ("Realista grave", "grave"), ("Realista natural", "normal")):
             add(label, lambda _=False, v=v: self.set_voice(v), self.cfg.get("efeito_voz", "robo") == v, menu=vz)
         add("🔇  Silenciar voz", self.toggle_mute, self.cfg.get("mudo"))
         add("🎲  Movimentos aleatórios", self.toggle_random, self.cfg.get("comportamentos_aleatorios", True))
@@ -1842,6 +1848,7 @@ class RobotWindow(QWidget):
         self.cfg["efeito_voz"] = v; save_config(self.cfg)
         self.say({"robo": f"Voz de robô ativada, {self.nome}!",
                   "robo_metalico": f"Voz de robô metálico ativada, {self.nome}!",
+                  "grave": f"Voz grave ativada, {self.nome}. Firme e direto ao ponto.",
                   "normal": f"Voz natural ativada, {self.nome}."}[v], "happy")
 
     def toggle_mute(self):
