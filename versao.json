@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.0",
-  "notas": "Atualizacao automatica, atalhos de ligar/desligar, voz de robo.",
+  "versao": "1.4.1",
+  "notas": "Mais leve: menos quadros por segundo quando parado e imagens pre-redimensionadas.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

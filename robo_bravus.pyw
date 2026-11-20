@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.0"
+VERSAO = "1.4.1"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -1197,11 +1197,34 @@ class SpriteRobot(RobotModel):
         target = 0.25 + 0.75 * abs(math.sin(self.t * 17) * math.sin(self.t * 5.3 + 1)) if self.talking else 0.0
         self.mouth = lerp(self.mouth, target, min(1.0, dt * 20))
 
-    @staticmethod
-    def part(p, pix, piv, ang, dy=0.0):
+    _scaled = {}
+
+    @classmethod
+    def blit(cls, p, name):
+        """Desenha a camada ja redimensionada para o tamanho da tela (bem mais leve)."""
+        pix = cls.pixmaps()[name]
+        tr = p.transform()
+        dpr = p.device().devicePixelRatioF() if p.device() else 1.0
+        eff = round(math.hypot(tr.m11(), tr.m12()) * dpr, 3)
+        key = (name, eff)
+        sp = cls._scaled.get(key)
+        if sp is None:
+            if len(cls._scaled) > 24:
+                cls._scaled.clear()
+            sp = pix.scaled(max(1, int(pix.width() * eff)), max(1, int(pix.height() * eff)),
+                            Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            sp.setDevicePixelRatio(dpr)
+            cls._scaled[key] = sp
+        p.save()
+        p.scale(pix.width() / (sp.width() / dpr), pix.height() / (sp.height() / dpr))
+        p.drawPixmap(0, 0, sp)
+        p.restore()
+
+    @classmethod
+    def part(cls, p, name, piv, ang, dy=0.0):
         p.save()
         p.translate(piv.x(), piv.y() + dy); p.rotate(ang); p.translate(-piv.x(), -piv.y())
-        p.drawPixmap(0, 0, pix)
+        cls.blit(p, name)
         p.restore()
 
     def draw(self, p, head_only=False):
@@ -1225,12 +1248,12 @@ class SpriteRobot(RobotModel):
         p.translate(0, fy)
         p.scale(self.K, self.K)
         if not head_only:
-            self.part(p, px["armL"], self.ARML_PIV, self.la)
-            self.part(p, px["body"], P(0, 0), 0)
+            self.part(p, "armL", self.ARML_PIV, self.la)
+            self.part(p, "body", P(0, 0), 0)
         p.save()
         p.translate(self.HEAD_PIV.x(), self.HEAD_PIV.y() + self.hdy); p.rotate(self.rh)
         p.translate(-self.HEAD_PIV.x(), -self.HEAD_PIV.y())
-        p.drawPixmap(0, 0, px["head"])
+        self.blit(p, "head")
         lx, ly = self.look.x(), self.look.y()
         for side, (c, f) in zip((-1, 1), self.EYES):
             p.save(); p.translate(c.x() + lx * 3.0, c.y() + ly * 3.0); p.scale(f, f)
@@ -1258,7 +1281,7 @@ class SpriteRobot(RobotModel):
             if "cup" in self.fx:
                 p.save(); p.translate(self.HAND_R.x() + 5, self.HAND_R.y() - 30); p.scale(3.2, 3.2)
                 self.draw_cup(p, P(0, 0)); p.restore()
-            p.drawPixmap(0, 0, px["armR"])
+            self.blit(p, "armR")
             p.restore()
         p.restore()
         if not head_only:
@@ -1563,7 +1586,12 @@ class RobotWindow(QWidget):
                 and time.monotonic() - self.last_interaction > 20 * 60):
             self.go_sleep()
 
-        self.update()
+        animado = m.talking or self.listening or self.action or self.bubble_until > t
+        iv = 40 if animado else 66          # 25 fps em acao, 15 fps parado
+        if self.tick_timer.interval() != iv:
+            self.tick_timer.setInterval(iv)
+        if self.isVisible():
+            self.update()
 
     def random_behavior(self):
         t = self.m.t
