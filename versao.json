@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.6",
-  "notas": "So duas vozes: robo menino (padrao) e natural.",
+  "versao": "1.4.7",
+  "notas": "Faz uma acao natural a cada 1 minuto (sentar, cocar a cabeca, pensar, acenar, espreguicar, cochilar).",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

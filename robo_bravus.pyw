@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.6"
+VERSAO = "1.4.7"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -1228,7 +1228,7 @@ class SpriteRobot(RobotModel):
         k = min(1.0, dt * 7)
         self.rh = lerp(self.rh, h, k); self.ra = lerp(self.ra, r, k); self.la = lerp(self.la, l, k)
         self.hdy = lerp(self.hdy, 4 if self.expr == "sleep" else 0, k)
-        self.lift = lerp(self.lift, -self.sit * 8, min(1.0, dt * 3))
+        self.lift = lerp(self.lift, -self.sit * 16, min(1.0, dt * 3))
         target = 0.25 + 0.75 * abs(math.sin(self.t * 17) * math.sin(self.t * 5.3 + 1)) if self.talking else 0.0
         self.mouth = lerp(self.mouth, target, min(1.0, dt * 20))
 
@@ -1396,7 +1396,7 @@ class RobotWindow(QWidget):
         self.listen_after_speech = False
         self.look_target = None
         self.look_until = 0.0
-        self.next_idle = 12.0
+        self.next_idle = 20.0
         self.next_blink = 2.0
         self.last_interaction = time.monotonic()
         self.drag_off, self.press_pos, self.dragged = None, None, False
@@ -1636,18 +1636,36 @@ class RobotWindow(QWidget):
         if self.isVisible():
             self.update()
 
+    ROTINA = ["sit", "scratch", "think", "wave", "stretch", "nap"]
+
     def random_behavior(self):
+        """A cada 1 minuto faz uma das acoes do menu, em ordem embaralhada (sem repetir seguido)."""
         t = self.m.t
-        choice = random.choices(["sit", "scratch", "think", "look", "wave", "stretch"],
-                                weights=[3, 3, 3, 2, 1, 1])[0]
+        if not getattr(self, "_fila", None):
+            fila = self.ROTINA[:]
+            random.shuffle(fila)
+            if getattr(self, "_ultima", None) == fila[0]:
+                fila.append(fila.pop(0))
+            self._fila = fila
+        choice = self._fila.pop(0)
+        self._ultima = choice
         if choice == "sit":
-            self.base_sit = not self.base_sit
-        elif choice == "look":
-            self.look_target = P(random.choice([-7, 7]), random.uniform(-3, 3))
-            self.look_until = t + 2.5
+            self.base_sit = not self.base_sit          # senta ou levanta/flutua
+            self.set_expr("happy", 1.5)
+        elif choice == "nap":
+            self.go_sleep()                             # cochilo rapido
+            self._napping = True
+            QTimer.singleShot(9000, self.end_nap)
         else:
             self.do_action(choice)
-        self.next_idle = t + random.uniform(15, 45)
+        self.next_idle = t + 60
+
+    def end_nap(self):
+        if getattr(self, "_napping", False) and self.sleeping:
+            self.sleeping = False
+            self.base_sit = False
+            self.do_action("stretch")
+        self._napping = False
 
     # ---------- eventos de tempo ----------
     def reset_water(self):
