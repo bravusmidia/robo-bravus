@@ -1,0 +1,8 @@
+PySide6-Essentials>=6.6
+edge-tts>=6.1
+pyttsx3>=2.90
+SpeechRecognition>=3.10
+sounddevice>=0.4.6
+standard-aifc; python_version >= "3.13"
+audioop-lts; python_version >= "3.13"
+miniaudio>=1.59
