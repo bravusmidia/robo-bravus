@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.6.0"
+VERSAO = "1.6.1"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -2424,7 +2424,7 @@ class RobotWindow(QWidget):
         mn.addSeparator()
         add("🧠  Configurar IA (responder tudo)" + ("  ✓" if self.ai.available() else ""), self.config_ai)
         add(f"🔄  Procurar atualização (v{VERSAO})", self.manual_update)
-        add("📋  Ver registro (para suporte)", lambda: pc_open(LOG_PATH))
+        add("📋  Ver registro (para suporte)", lambda: subprocess.Popen(["notepad", LOG_PATH]) if sys.platform == "win32" else None)
         add("⚙️  Abrir configurações", lambda: os.startfile(CONFIG_PATH) if sys.platform == "win32" else None)
         add("🙈  Desativar (Ctrl+Alt+B)", lambda: self.set_active(False))
         add("❌  Sair", self.quit_app)

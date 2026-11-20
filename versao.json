@@ -1,6 +1,6 @@
 {
-  "versao": "1.6.0",
-  "notas": "Voz de menino nova (masculina rejuvenescida); relogio pela internet com holograma na mao; IA mais rapida; comando de voz para se atualizar.",
+  "versao": "1.6.1",
+  "notas": "Registro abre direto no Bloco de notas.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
