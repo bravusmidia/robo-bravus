@@ -1,6 +1,6 @@
 {
-  "versao": "1.8.0",
-  "notas": "Voz de menino mais nova e animada; comeca a falar em menos de 1 segundo (fala em pedacos); bipe instantaneo ao chamar Bravus; microfone mais sensivel.",
+  "versao": "1.8.1",
+  "notas": "Corrige aviso falso de chave invalida na IA; tenta configuracoes mais simples automaticamente.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

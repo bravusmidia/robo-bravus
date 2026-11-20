@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.8.0"
+VERSAO = "1.8.1"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -615,9 +615,18 @@ class AIWorker(QObject):
                                            [-int(x) for x in re.findall(r"\d+", n)[:2]]))
                     model = ok[0]
                     continue
-                if "400" in msg and ("thinking" in msg or "invalid json" in msg or "unknown name" in msg) and modo < len(self.RAPIDO) - 1:
-                    modo += 1
-                    continue
+                chave_ruim = any(x in msg for x in ("api key not valid", "api_key_invalid", "api key expired",
+                                                     "permission_denied", "401"))
+                if "400" in msg and not chave_ruim:
+                    # o modelo nao aceitou alguma configuracao: tenta um modo mais simples, depois outro modelo
+                    if modo < len(self.RAPIDO) - 1:
+                        modo += 1
+                        continue
+                    if not getattr(self, "_trocou", False):
+                        self._trocou = True
+                        model = "gemini-flash-latest" if "lite" in model else "gemini-flash-lite-latest"
+                        modo = 0
+                        continue
                 raise
         if self.cfg.get("ia_modelo_gemini") != model or self.cfg.get("ia_modo_rapido") != modo:
             self.cfg["ia_modelo_gemini"] = model; self.cfg["ia_modo_rapido"] = modo; save_config(self.cfg)
@@ -637,6 +646,7 @@ class AIWorker(QObject):
 
     def _run(self, text):
         nome = self.cfg["nome_usuario"]
+        self._trocou = False
         try:
             out = self._gemini(text) if self.provider() == "gemini" else self._anthropic(text)
             out = re.sub(r"[*#_`]", "", out).strip()
@@ -650,8 +660,11 @@ class AIWorker(QObject):
                 self.answered.emit(f"{nome}, a inteligência artificial do Google está muito ocupada agora. Me pergunta de novo daqui a pouquinho.")
             elif "429" in msg or "quota" in msg.lower():
                 self.answered.emit(f"{nome}, usei todas as perguntas grátis por agora. Daqui a pouco eu volto a responder.")
-            elif "400" in msg or "401" in msg or "403" in msg or "API key" in msg:
-                self.answered.emit(f"{nome}, a chave da inteligência artificial parece inválida. Confere no menu, em Configurar IA.")
+            elif any(x in msg.lower() for x in ("api key not valid", "api_key_invalid", "api key expired", "401")):
+                self.answered.emit(f"{nome}, o Google recusou a chave da inteligência artificial. Confere no menu, em Configurar IA.")
+            elif re.search(r"HTTP (\d+)", msg):
+                cod = re.search(r"HTTP (\d+)", msg).group(1)
+                self.answered.emit(f"Desculpa, {nome}, a inteligência artificial deu um erro, código {cod}. Tenta de novo?")
             else:
                 motivo = "demorou demais" if "timed out" in msg.lower() or "timeout" in msg.lower() else "sem conexão com a IA"
                 self.answered.emit(f"Desculpa, {nome}, não consegui responder agora: {motivo}. Tenta de novo?")
@@ -2588,7 +2601,7 @@ class RobotWindow(QWidget):
             "Para remover a chave, deixe em branco e clique OK.")
         if not ok:
             return
-        k = txt.strip()
+        k = txt.strip().strip("\"' ")
         if k.startswith("sk-ant"):
             self.cfg["ia_chave_anthropic"] = k; self.cfg["ia_chave_gemini"] = ""
         elif k:

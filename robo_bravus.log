@@ -70,3 +70,5 @@
 2026-11-20 19:03:14,806 INFO relogio https://www.google.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
 2026-11-20 19:03:14,860 INFO relogio https://www.cloudflare.com: <urlopen error Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)>
 2026-11-20 19:03:14,861 INFO relogio http://www.google.com: <urlopen error [Errno -2] Name or service not known>
+2026-11-20 19:04:52,523 WARNING IA falhou: HTTP 400: API key not valid. Please pass a valid API key. API_KEY_INVALID
+2026-11-20 19:04:52,523 WARNING IA falhou: HTTP 400: Request contains an invalid argument.
