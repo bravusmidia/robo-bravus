@@ -1,0 +1,64 @@
+ROBO BRAVUS - Assistente flutuante da Bravus Midia
+===================================================
+
+COMO INSTALAR (so uma vez)
+1. Extraia esta pasta para um lugar fixo, ex.: Documentos\RoboBravus
+   (nao rode de dentro do .zip)
+2. De dois cliques em INSTALAR.bat
+3. Pronto: o robo aparece no canto inferior direito da tela.
+
+ATALHOS PARA LIGAR / DESLIGAR
+Na Area de Trabalho:
+  "Ligar Robo Bravus" ........ abre o robo (se ja estiver aberto, faz ele aparecer)
+  "Desligar Robo Bravus" ..... fecha o robo por completo
+No teclado (funciona com qualquer programa aberto):
+  Ctrl + Alt + B ............. desativa / ativa o robo (some da tela, para de ouvir
+                               e pausa o lembrete de agua; aperte de novo para voltar)
+  Ctrl + Alt + F ............. fazer o robo te ouvir agora
+  Ctrl + Alt + M ............. silenciar / voltar a voz
+Clique no icone do robo perto do relogio tambem ativa / desativa.
+
+COMO USAR
+- Clique no robo ............. ele escuta o que voce falar
+- Diga "Bravus, ..." ......... ele responde sem precisar clicar (escuta continua)
+- Arraste o robo ............. muda ele de lugar (ele lembra da posicao)
+- Botao direito no robo ...... menu: escrever mensagem, acoes, tamanho,
+                               lembrete de agua, silenciar, iniciar com o Windows, sair
+- Icone perto do relogio ..... mesmo menu (se perder o robo de vista)
+
+O QUE ELE FAZ
+- Fica flutuando por cima de todas as janelas, sem aparecer na barra de tarefas
+- Da bom dia / boa tarde / boa noite e te chama de Andrade
+- Te lembra de beber agua a cada 30 minutos (mostra um copo d'agua)
+- Senta, coca a cabeca, pensa, acena, espreguica e cochila sozinho
+- Olhos seguem o mouse; boca mexe quando fala
+- Dorme de madrugada se voce ficar 20 min sem falar com ele
+
+FRASES QUE ELE ENTENDE (exemplos)
+  "Bravus, bom dia"                  "Bravus, que horas sao?"
+  "Bravus, que dia e hoje?"          "Bravus, abre o YouTube / Instagram / WhatsApp / Gmail / Drive / Canva"
+  "Bravus, abre o gerenciador de anuncios"
+  "Bravus, pesquisa precos de landing page"
+  "Bravus, toca musica pra focar"    "Bravus, me lembra de ligar pro cliente em 15 minutos"
+  "Bravus, bebi agua"                "Bravus, conta uma piada"
+  "Bravus, senta / levanta / coca a cabeca / pensa / vai dormir"
+  "Bravus, fica quieto" (so texto)   "Bravus, pode falar" (volta a voz)
+
+DEIXAR ELE MAIS INTELIGENTE (opcional)
+Sem IA ele responde aos comandos acima. Para conversar sobre QUALQUER assunto:
+1. Crie uma chave em https://console.anthropic.com (API da Anthropic, paga por uso, centavos)
+2. Botao direito no robo > Abrir configuracoes
+3. Cole a chave em "ia_chave_anthropic": "sk-ant-..."
+4. Salve, feche o robo (Sair) e abra de novo pelo atalho.
+
+CONFIGURACOES (config.json)
+  lembrete_agua_min ....... intervalo do lembrete (30)
+  voz ..................... pt-BR-AntonioNeural (masculina) ou pt-BR-FranciscaNeural (feminina)
+  palavras_ativacao ....... nomes que acordam o robo
+  tamanho ................. 0.55 a 1.05
+
+OBSERVACOES
+- A voz natural e o reconhecimento de fala usam a internet. Sem internet,
+  ele fala com a voz do Windows e voce pode usar "Escrever mensagem".
+- Precisa de microfone para ele te ouvir.
+- Se algo der errado, veja o arquivo robo_bravus.log nesta pasta.
