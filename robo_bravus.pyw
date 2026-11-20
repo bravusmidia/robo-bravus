@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.5"
+VERSAO = "1.4.6"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -337,12 +337,8 @@ class AIWorker(QObject):
 # ----------------------------------------------------------------------------
 # estilo: (voz do Edge, tom, velocidade, efeito)   efeito: None | "metal" | "metal_forte"
 VOZ_ESTILOS = {
-    "menino": ("pt-BR-ThalitaNeural", "-6Hz", "+8%", "metal"),        # robo menino (padrao)
-    "menino2": ("pt-BR-AntonioNeural", "+60Hz", "+10%", "metal"),     # robo menino, timbre mais agudo
-    "robo": ("pt-BR-AntonioNeural", "+14Hz", "+4%", "metal"),
-    "robo_metalico": ("pt-BR-AntonioNeural", "+6Hz", "+4%", "metal_forte"),
-    "grave": ("pt-BR-AntonioNeural", "-14Hz", "+4%", None),
-    "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None),
+    "menino": ("pt-BR-ThalitaNeural", "-6Hz", "+8%", "metal"),   # robo menino (padrao)
+    "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None),     # voz natural
 }
 
 
@@ -1681,6 +1677,8 @@ class RobotWindow(QWidget):
             msg = f"Bom dia, {self.nome}! Hoje é {DIAS[now.weekday()]}. {random.choice(MOTIVACAO)}"
         else:
             msg = f"{saud}, {self.nome}! Que bom te ver. Estou aqui se precisar."
+        if "--reiniciar" in sys.argv:
+            msg = f"Pronto, {self.nome}! Fui atualizado para a versão {VERSAO}. Essa é minha voz de robô menino!"
         if saud == "Bom dia":
             self.cfg["ultima_saudacao"] = now.date().isoformat()
         save_config(self.cfg)
@@ -1859,9 +1857,7 @@ class RobotWindow(QWidget):
             self.cfg.get("lembrete_agua_ativo", True))
         add(f"👂  Escuta contínua (diga \"{robo}\")", self.toggle_listen, self.cfg.get("escuta_continua"))
         vz = mn.addMenu("🔊  Voz")
-        for label, v in (("Robô menino", "menino"), ("Robô menino 2", "menino2"),
-                         ("Robô (limpo)", "robo"), ("Robô metálico", "robo_metalico"),
-                         ("Realista grave", "grave"), ("Realista natural", "normal")):
+        for label, v in (("Robô menino", "menino"), ("Natural", "normal")):
             add(label, lambda _=False, v=v: self.set_voice(v), self.cfg.get("efeito_voz", "menino") == v, menu=vz)
         add("🔇  Silenciar voz", self.toggle_mute, self.cfg.get("mudo"))
         add("🎲  Movimentos aleatórios", self.toggle_random, self.cfg.get("comportamentos_aleatorios", True))
@@ -1889,11 +1885,7 @@ class RobotWindow(QWidget):
 
     def set_voice(self, v):
         self.cfg["efeito_voz"] = v; save_config(self.cfg)
-        self.say({"menino": f"Oi, {self.nome}! Agora eu sou um robô menino!",
-                  "menino2": f"Oi, {self.nome}! Essa é minha outra voz de robô menino!",
-                  "robo": f"Voz de robô ativada, {self.nome}!",
-                  "robo_metalico": f"Voz de robô metálico ativada, {self.nome}!",
-                  "grave": f"Voz grave ativada, {self.nome}. Firme e direto ao ponto.",
+        self.say({"menino": f"Oi, {self.nome}! Essa é minha voz de robô menino. Gostou?",
                   "normal": f"Voz natural ativada, {self.nome}."}[v], "happy")
 
     def toggle_mute(self):
@@ -2132,8 +2124,8 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(QIcon(QPixmap.fromImage(render_icon(64))))
     cfg = load_config()
-    if not cfg.get("voz_menino_aplicada"):
-        cfg["efeito_voz"] = "menino"; cfg["voz_menino_aplicada"] = True
+    if cfg.get("efeito_voz") not in VOZ_ESTILOS or not cfg.get("voz_menino_v2"):
+        cfg["efeito_voz"] = "menino"; cfg["voz_menino_v2"] = True
     save_config(cfg)
     w = RobotWindow(cfg)
     w.show()

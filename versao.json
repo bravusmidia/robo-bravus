@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.5",
-  "notas": "Funciona sem PowerShell: downloads pelo curl do Windows e atalhos por VBScript.",
+  "versao": "1.4.6",
+  "notas": "So duas vozes: robo menino (padrao) e natural.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
