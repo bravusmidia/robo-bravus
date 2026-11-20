@@ -78,3 +78,4 @@
 2026-11-20 19:11:48,683 INFO voz: BRAVUS VOICE
 2026-11-20 19:11:50,480 INFO audio: sounddevice (voz online disponivel)
 2026-11-20 19:11:50,507 WARNING microfone: 'types.SimpleNamespace' object has no attribute 'RawInputStream'
+2026-11-20 19:15:34,593 WARNING sounddevice/miniaudio indisponivel: PortAudio library not found

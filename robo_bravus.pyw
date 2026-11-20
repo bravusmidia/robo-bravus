@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.9.1"
+VERSAO = "1.9.2"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -443,6 +443,10 @@ class Brain:
             return r("Deixa eu pensar um pouquinho...", "think")
         if has("acena", "da tchauzinho", "da um tchau"):
             return r(f"Oi, {nome}!", "wave")
+        if has("danca", "dancar", "dance", "faz uma danca"):
+            return r(f"Olha só, {nome}!", "dance")
+        if has("pula", "pular", "da um pulo"):
+            return r("Upa!", "jump")
         if has("vai dormir", "dorme", "descansa", "pode dormir"):
             return r(f"Tá bom, {nome}. Vou tirar um cochilo. Me chama se precisar.", "sleep")
         if has("acorda", "acordar"):
@@ -1783,32 +1787,39 @@ class SpriteRobot(RobotModel):
         self.lift = 0.0
 
     def targets(self):
+        """(cabeca, braco dir, braco esq, inclinacao do corpo, pulo)"""
         t, p = self.t, self.pose
         sway = math.sin(t * 0.9)
-        rest = (sway * 2.0, math.sin(t * 1.3) * 3, -math.sin(t * 1.3 + 0.7) * 3)
+        rest = (sway * 3.0, math.sin(t * 1.3) * 5, -math.sin(t * 1.3 + 0.7) * 5, math.sin(t * 0.7) * 2, 0)
         table = {
-            "scratch": (6 + math.sin(t * 3) * 1, -40 + math.sin(t * 14) * 6, 0),
-            "think": (-9 + sway, math.sin(t * 1.3) * 2, 38 + math.sin(t * 2) * 2),
-            "wave": (3 + sway, -6 + math.sin(t * 9) * 15, 0),
-            "present": (math.sin(t * 2) * 3, math.sin(t * 3) * 7, -math.sin(t * 3) * 7),
-            "talk": (math.sin(t * 2) * 3, math.sin(t * 2.7) * 8, math.sin(t * 3.1 + 1) * 8),
-            "point": (4, 24, 0),
-            "stretch": (-4 + math.sin(t * 4) * 2, -32, 32),
-            "listen": (8, -42, 0),
-            "water": (3, -22 + math.sin(t * 2.2) * 8, 0),
-            "sleep": (11 + math.sin(t * 0.8) * 1.5, 22, -22),
+            "scratch": (10 + math.sin(t * 3) * 2, -46 + math.sin(t * 14) * 9, 6, 5, 0),
+            "think": (-13 + sway * 2, math.sin(t * 1.3) * 3, 44 + math.sin(t * 2) * 3, -4, 0),
+            "wave": (6 + math.sin(t * 4) * 3, -12 + math.sin(t * 10) * 24, -8, math.sin(t * 5) * 3, 0),
+            "present": (math.sin(t * 2) * 4, math.sin(t * 3) * 12, -math.sin(t * 3) * 12, math.sin(t * 2) * 3, 0),
+            "talk": (math.sin(t * 2) * 3, math.sin(t * 2.7) * 8, math.sin(t * 3.1 + 1) * 8, 0, 0),
+            "point": (4, 24, 0, 3, 0),
+            "stretch": (-6 + math.sin(t * 4) * 3, -48, 48, math.sin(t * 2) * 4, 10),
+            "listen": (8, -42, 0, 4, 0),
+            "water": (3, -22 + math.sin(t * 2.2) * 8, 0, 0, 0),
+            "sleep": (11 + math.sin(t * 0.8) * 1.5, 22, -22, 0, 0),
+            "dance": (math.sin(t * 6) * 10, math.sin(t * 6) * 28, math.sin(t * 6 + math.pi) * 28,
+                      math.sin(t * 3) * 9, abs(math.sin(t * 6)) * 12),
+            "jump": (-4, -30, 30, 0, abs(math.sin(t * 3.2)) * 38),
+            "look": (math.sin(t * 1.5) * 12, 0, 0, math.sin(t * 1.5) * 4, 0),
         }
         return table.get(p, rest)
 
     def step(self, dt):
         self.t += dt
-        h, r, l = self.targets()
+        h, r, l, b, hop = self.targets()
         if self.expr == "sleep":
-            h, r, l = 11 + math.sin(self.t * 0.8) * 1.5, 22, -22
+            h, r, l, b, hop = 11 + math.sin(self.t * 0.8) * 1.5, 22, -22, 0, 0
         k = min(1.0, dt * 7)
         self.rh = lerp(self.rh, h, k); self.ra = lerp(self.ra, r, k); self.la = lerp(self.la, l, k)
+        self.brot = lerp(getattr(self, "brot", 0.0), b, k)
+        self.hop = lerp(getattr(self, "hop", 0.0), hop, min(1.0, dt * 12))
         self.hdy = lerp(self.hdy, 4 if self.expr == "sleep" else 0, k)
-        self.lift = lerp(self.lift, -self.sit * 16, min(1.0, dt * 3))
+        self.lift = lerp(self.lift, -self.sit * 22, min(1.0, dt * 3))
         target = 0.25 + 0.75 * abs(math.sin(self.t * 17) * math.sin(self.t * 5.3 + 1)) if self.talking else 0.0
         self.mouth = lerp(self.mouth, target, min(1.0, dt * 20))
 
@@ -1846,7 +1857,7 @@ class SpriteRobot(RobotModel):
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         t = self.t
-        fy = math.sin(t * 1.6) * 7.0 - self.lift
+        fy = math.sin(t * 1.6) * 7.0 - self.lift - getattr(self, "hop", 0.0)
         px = self.pixmaps()
         if not head_only:
             k = 0.85 - (fy + 7) / 40
@@ -1861,6 +1872,9 @@ class SpriteRobot(RobotModel):
                 p.drawEllipse(ring.adjusted(22 * k, 4 * k, -22 * k, -4 * k))
         p.save()
         p.translate(0, fy)
+        br = getattr(self, "brot", 0.0)
+        if br and not head_only:          # inclina o corpo inteiro (danca, aceno...)
+            p.translate(120, 230); p.rotate(br); p.translate(-120, -230)
         p.scale(self.K, self.K)
         if not head_only:
             self.part(p, "armL", self.ARML_PIV, self.la)
@@ -2021,7 +2035,7 @@ class RobotWindow(QWidget):
         self.listen_after_speech = False
         self.look_target = None
         self.look_until = 0.0
-        self.next_idle = 20.0
+        self.next_idle = 10.0
         self.next_blink = 2.0
         self.last_interaction = time.monotonic()
         self.drag_off, self.press_pos, self.dragged = None, None, False
@@ -2133,8 +2147,8 @@ class RobotWindow(QWidget):
                 QTimer.singleShot(400, self.start_listening)
 
     # ---------- acoes e expressoes ----------
-    DUR = {"clock": 10.0, "scratch": 4.0, "think": 5.0, "wave": 2.6, "present": 3.0, "water": 6.0,
-           "point": 2.5, "stretch": 2.6, "happy": 2.5}
+    DUR = {"clock": 10.0, "scratch": 6.0, "think": 7.0, "wave": 4.0, "present": 3.0, "water": 6.0,
+           "point": 2.5, "stretch": 4.0, "happy": 2.5, "dance": 7.0, "jump": 3.0, "look": 5.0}
 
     def do_action(self, a):
         if a == "sit":
@@ -2199,8 +2213,10 @@ class RobotWindow(QWidget):
             e = "think"
         elif self.action == "scratch":
             e = "think"
-        elif self.action in ("wave", "water", "stretch"):
+        elif self.action in ("wave", "water", "stretch", "jump"):
             e = "happy"
+        elif self.action == "dance":
+            e = "excited"
         elif self.action == "present":
             e = "excited"
         elif self.action == "clock":
@@ -2274,7 +2290,7 @@ class RobotWindow(QWidget):
         if self.isVisible():
             self.update()
 
-    ROTINA = ["sit", "scratch", "think", "wave", "stretch", "nap"]
+    ROTINA = ["dance", "scratch", "think", "wave", "jump", "stretch", "sit", "look", "nap"]
 
     def random_behavior(self):
         """A cada 1 minuto faz uma das acoes do menu, em ordem embaralhada (sem repetir seguido)."""
@@ -2296,6 +2312,7 @@ class RobotWindow(QWidget):
             QTimer.singleShot(9000, self.end_nap)
         else:
             self.do_action(choice)
+        log.info("movimento: %s", choice)
         self.next_idle = t + 60
 
     def end_nap(self):
@@ -2613,7 +2630,8 @@ class RobotWindow(QWidget):
         mn.addSeparator()
         acts = mn.addMenu("🤖  Ações")
         for label, a in (("Sentar", "sit"), ("Levantar / flutuar", "stand"), ("Coçar a cabeça", "scratch"),
-                         ("Pensar", "think"), ("Acenar", "wave"), ("Espreguiçar", "stretch"), ("Dormir", "sleep")):
+                         ("Pensar", "think"), ("Acenar", "wave"), ("Espreguiçar", "stretch"), ("Dançar", "dance"),
+                         ("Pular", "jump"), ("Olhar em volta", "look"), ("Dormir", "sleep")):
             add(label, lambda _=False, a=a: (self.do_action(a), a != "sleep" and setattr(self, "sleeping", False)), menu=acts)
         add("Me lembrar de beber água agora", self.water_reminder, menu=acts)
         mn.addSeparator()

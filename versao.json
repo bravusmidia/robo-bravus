@@ -1,6 +1,6 @@
 {
-  "versao": "1.9.1",
-  "notas": "Microfone de mesa: sensibilidade alta por padrao, ganho automatico da voz e menu de sensibilidade.",
+  "versao": "1.9.2",
+  "notas": "Movimentos maiores e mais longos a cada minuto; novos: dancar, pular e olhar em volta.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
