@@ -1,6 +1,6 @@
 {
-  "versao": "1.9.0",
-  "notas": "Nova voz Guerreiro (grave, firme, com atitude); pronto para a API do BRAVUS VOICE.",
+  "versao": "1.9.1",
+  "notas": "Microfone de mesa: sensibilidade alta por padrao, ganho automatico da voz e menu de sensibilidade.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

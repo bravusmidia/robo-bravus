@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.9.0"
+VERSAO = "1.9.1"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -50,6 +50,7 @@ DEFAULTS = {
     "escuta_continua": True,
     "palavras_ativacao": ["bravus", "bravos", "bravo", "brabus", "brabos", "brabo", "bravis", "bravu", "brávus", "robo", "robozinho"],
     "microfone": None,
+    "sensibilidade_mic": "alta",
     "voz": "pt-BR-AntonioNeural",
     "voz_velocidade": "+4%",
     "voz_tom": "+28Hz",
@@ -1085,8 +1086,12 @@ class Listener(QObject):
     level = Signal(float)     # 0..1, para mostrar que esta ouvindo
 
     RATE, BLOCK = 16000, 480  # blocos de 30 ms
-    MIN_THR = 120.0           # sensibilidade (menor = ouve mais baixo)
-    MAX_THR = 1800.0          # mesmo com som de video no fundo, nao fica "surdo"
+    # sensibilidade: (multiplicador sobre o ruido do ambiente, limite minimo, limite maximo)
+    SENS = {"normal": (2.0, 200.0, 2000.0), "alta": (1.35, 100.0, 1200.0), "maxima": (1.15, 60.0, 900.0)}
+
+    def _thr(self):
+        mult, mn, mx = self.SENS.get(self.cfg.get("sensibilidade_mic", "alta"), self.SENS["alta"])
+        return min(mx, max(mn, self.ambient * mult))
 
     def __init__(self, cfg, is_busy):
         super().__init__()
@@ -1100,6 +1105,18 @@ class Listener(QObject):
         self.ok = True
         self._last_net_err = 0
         threading.Thread(target=self._loop, daemon=True).start()
+
+    @staticmethod
+    def normalizar(data):
+        """Ganho automatico: voz captada de longe fica com volume bom para o reconhecimento."""
+        a = array("h", data)
+        if not a:
+            return data
+        pico = max(max(a), -min(a), 1)
+        ganho = min(30.0, 26000.0 / pico)
+        if ganho <= 1.05:
+            return data
+        return array("h", (int(max(-32767, min(32767, x * ganho))) for x in a)).tobytes()
 
     @staticmethod
     def rms(data):
@@ -1124,7 +1141,7 @@ class Listener(QObject):
             data, _ = self.stream.read(self.BLOCK)
             vals.append(self.rms(bytes(data)))
         self.ambient = sum(vals) / len(vals)
-        self.threshold = min(self.MAX_THR, max(self.MIN_THR, self.ambient * 2.0))
+        self.threshold = self._thr()
         log.info("microfone aberto (aparelho %s); ruido %.0f, limite %.0f", dev, self.ambient, self.threshold)
 
     def _close(self):
@@ -1159,12 +1176,12 @@ class Listener(QObject):
                 else:
                     pre.append(data)
                     self.ambient = self.ambient * 0.97 + lvl * 0.03
-                    self.threshold = min(self.MAX_THR, max(self.MIN_THR, self.ambient * 2.0))
+                    self.threshold = self._thr()
                     if time.monotonic() - start > limit:
                         return None
             else:
                 frames.append(data)
-                if lvl > self.threshold * 0.6:
+                if lvl > self.threshold * 0.5:
                     silence = 0; voiced += 1
                 else:
                     silence += 1
@@ -1210,6 +1227,7 @@ class Listener(QObject):
             if forced:
                 self.status.emit("processando")
             try:
+                audio = self.normalizar(audio)
                 text = rec.recognize_google(sr.AudioData(audio, self.RATE, 2), language="pt-BR")
             except sr.UnknownValueError:
                 if forced:
@@ -2377,6 +2395,12 @@ class RobotWindow(QWidget):
             a = QAction(nome[:45], menu); a.setCheckable(True); a.setChecked(atual == i)
             a.triggered.connect(lambda _=False, i=i: self.set_mic(i)); menu.addAction(a)
 
+    def set_sens(self, v):
+        self.cfg["sensibilidade_mic"] = v; save_config(self.cfg)
+        self.listener.threshold = self.listener._thr()
+        self.show_status({"normal": "Sensibilidade normal.", "alta": "Sensibilidade alta: pode falar normal com o microfone na mesa.",
+                          "maxima": "Sensibilidade máxima: ouço até voz baixa."}[v], 3)
+
     def set_mic(self, i):
         self.cfg["microfone"] = i; save_config(self.cfg)
         self.listener._close()
@@ -2598,6 +2622,10 @@ class RobotWindow(QWidget):
         add(f"👂  Escuta contínua (diga \"{robo}\")", self.toggle_listen, self.cfg.get("escuta_continua"))
         mic = mn.addMenu("🎙️  Microfone")
         add("Testar microfone", self.test_mic, menu=mic)
+        sens = mic.addMenu("Sensibilidade")
+        for label, v in (("Normal (falar perto)", "normal"), ("Alta (microfone na mesa)", "alta"),
+                         ("Máxima (longe / voz baixa)", "maxima")):
+            add(label, lambda _=False, v=v: self.set_sens(v), self.cfg.get("sensibilidade_mic", "alta") == v, menu=sens)
         mic.addSeparator()
         self.mic_menu(mic)
         vz = mn.addMenu("🔊  Voz")
