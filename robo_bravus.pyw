@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.4.4"
+VERSAO = "1.4.5"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -706,6 +706,13 @@ class Updater(QObject):
             if sys.platform != "win32":
                 raise
             log.info("download pelo Python falhou (%s); tentando pelo Windows", e)
+            curl = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "curl.exe")
+            if os.path.exists(curl):
+                r = subprocess.run([curl, "-sSfL", "-H", "Cache-Control: no-cache", url], capture_output=True,
+                                   timeout=90, creationflags=0x08000000)
+                if r.returncode == 0 and r.stdout:
+                    return r.stdout
+                log.info("curl falhou: %s", r.stderr[-200:])
             # plano B: baixa usando a internet do proprio Windows (resolve certificados antigos)
             tmp = os.path.join(tempfile.gettempdir(), "robo_bravus_dl.tmp")
             ps = ("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
@@ -2052,25 +2059,35 @@ def make_autostart():
 
 
 def make_shortcut():
+    """Cria os atalhos (Area de Trabalho + Menu Iniciar) usando VBScript; nao depende do PowerShell."""
     script = os.path.abspath(__file__)
-    q = lambda s: s.replace("'", "''")
-    ps = "$d=[Environment]::GetFolderPath('Desktop');$w=New-Object -ComObject WScript.Shell;"
-    ps += "Remove-Item -ErrorAction SilentlyContinue ($d+'\\Robo Bravus.lnk');"
-    # Ctrl+Alt+R no atalho do Windows: abre o robo mesmo quando ele esta fechado
-    ps += "$m=[Environment]::GetFolderPath('Programs')+'\\Robo Bravus';New-Item -ItemType Directory -Force $m | Out-Null;"
-    ps += "Remove-Item -ErrorAction SilentlyContinue ($m+'\\Ligar Robo Bravus.lnk');"
-    for pasta, nome, arg, desc, tecla in (("$d", "Ligar Robo Bravus", "", "Liga o Robo Bravus (Ctrl+Alt+R)", "CTRL+ALT+R"),
-                                         ("$d", "Desligar Robo Bravus", " --sair", "Desliga o Robo Bravus", ""),
-                                         ("$m", "Robo Bravus", "", "Robo Bravus - Bravus Midia", "")):
-        ps += (f"$s=$w.CreateShortcut({pasta}+'\\{nome}.lnk');"
-               f"$s.TargetPath='{q(pythonw_exe())}';"
-               f"$s.Arguments='\"{q(script)}\"{arg}';"
-               f"$s.WorkingDirectory='{q(APP_DIR)}';"
-               f"$s.IconLocation='{q(ICON_PATH)}';"
-               + (f"$s.Hotkey='{tecla}';" if tecla else "") +
-               f"$s.Description='{desc}';$s.Save();")
-    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], check=False,
-                   creationflags=0x08000000 if sys.platform == "win32" else 0)
+    vq = lambda x: x.replace('"', '""')
+    lines = ['Set w = CreateObject("WScript.Shell")',
+             'Set fs = CreateObject("Scripting.FileSystemObject")',
+             'd = w.SpecialFolders("Desktop")',
+             'm = w.SpecialFolders("Programs") & "\\Robo Bravus"',
+             'If Not fs.FolderExists(m) Then fs.CreateFolder(m)',
+             'If fs.FileExists(d & "\\Robo Bravus.lnk") Then fs.DeleteFile(d & "\\Robo Bravus.lnk")']
+    for pasta, nome, arg, desc, tecla in (("d", "Ligar Robo Bravus", "", "Liga o Robo Bravus (Ctrl+Alt+R)", "CTRL+ALT+R"),
+                                         ("d", "Desligar Robo Bravus", " --sair", "Desliga o Robo Bravus", ""),
+                                         ("m", "Robo Bravus", "", "Robo Bravus - Bravus Midia", "")):
+        lines += [f'Set s = w.CreateShortcut({pasta} & "\\{nome}.lnk")',
+                  f's.TargetPath = "{vq(pythonw_exe())}"',
+                  f's.Arguments = """{vq(script)}""{arg}"',
+                  f's.WorkingDirectory = "{vq(APP_DIR)}"',
+                  f's.IconLocation = "{vq(ICON_PATH)}"',
+                  f's.Description = "{desc}"']
+        if tecla:
+            lines.append(f's.Hotkey = "{tecla}"')
+        lines.append("s.Save")
+    vbs = os.path.join(tempfile.gettempdir(), "robo_bravus_atalhos.vbs")
+    with open(vbs, "w", encoding="mbcs" if sys.platform == "win32" else "utf-8") as f:
+        f.write("\r\n".join(lines) + "\r\n")
+    cscript = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cscript.exe")
+    r = subprocess.run([cscript, "//nologo", vbs], capture_output=True, text=True,
+                       creationflags=0x08000000 if sys.platform == "win32" else 0)
+    if r.returncode != 0:
+        raise RuntimeError("atalhos: " + (r.stderr or r.stdout)[-200:])
 
 
 def install(autostart):
@@ -2078,7 +2095,10 @@ def install(autostart):
     render_icon(256).save(ICON_PATH, "ICO")
     print("  - Icone criado")
     if sys.platform == "win32":
-        make_shortcut(); print("  - Atalhos 'Ligar Robo Bravus' e 'Desligar Robo Bravus' criados na Area de Trabalho")
+        try:
+            make_shortcut(); print("  - Atalhos criados (Area de Trabalho e Menu Iniciar). Ctrl+Alt+R liga o robo")
+        except Exception as e:
+            print("  - Nao consegui criar os atalhos:", e)
         if autostart:
             make_autostart(); print("  - Robo vai iniciar junto com o Windows")
         flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP

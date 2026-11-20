@@ -1,6 +1,6 @@
 {
-  "versao": "1.4.4",
-  "notas": "Voz de robo menino; atualizador mais robusto no Windows.",
+  "versao": "1.4.5",
+  "notas": "Funciona sem PowerShell: downloads pelo curl do Windows e atalhos por VBScript.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
