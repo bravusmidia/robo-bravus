@@ -1,6 +1,6 @@
 {
-  "versao": "1.10.0",
-  "notas": "Responde bem mais rapido (comeca a falar enquanto a IA ainda pensa), conversa mais natural e nova voz suave como padrao.",
+  "versao": "1.11.0",
+  "notas": "Modo conversa: diga Bravus e ele fica atento; diga obrigado, Bravus e ele para de escutar. Escuta melhor e atende mais rapido.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

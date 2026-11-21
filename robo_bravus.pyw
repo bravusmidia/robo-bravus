@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.10.0"
+VERSAO = "1.11.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -1265,7 +1265,7 @@ class Voice(QObject):
 # Escuta (microfone -> texto)
 # ----------------------------------------------------------------------------
 class Listener(QObject):
-    heard = Signal(str, bool)
+    heard = Signal(str, bool, list)   # (melhor texto, clique?, outras possibilidades do reconhecimento)
     status = Signal(str)
     level = Signal(float)     # 0..1, para mostrar que esta ouvindo
 
@@ -1287,6 +1287,7 @@ class Listener(QObject):
         self.ambient = 200.0
         self.threshold = 500.0
         self.ok = True
+        self.conversa = False      # modo conversa: continua ouvindo mesmo sem a escuta continua ligada
         self._last_net_err = 0
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -1337,7 +1338,7 @@ class Listener(QObject):
             self.stream = None
 
     def _capture(self, forced):
-        pre = collections.deque(maxlen=10)
+        pre = collections.deque(maxlen=16)   # ~0,5 s antes da fala: nao corta o comeco do "Bravus"
         start = time.monotonic()
         limit = 7.0 if forced else 1.5
         frames, speaking, silence, voiced = [], False, 0, 0
@@ -1369,7 +1370,7 @@ class Listener(QObject):
                     silence = 0; voiced += 1
                 else:
                     silence += 1
-                if silence > 12 or len(frames) > 400:
+                if silence > 14 or len(frames) > 400:
                     break
         if voiced < 8:
             return None
@@ -1386,7 +1387,7 @@ class Listener(QObject):
             return
         rec = sr.Recognizer()
         while self.running:
-            need = (self.force or self.cfg.get("escuta_continua")) and not getattr(self, "paused", False)
+            need = (self.force or self.conversa or self.cfg.get("escuta_continua")) and not getattr(self, "paused", False)
             if not need:
                 self._close(); time.sleep(0.25); continue
             if self.is_busy():
@@ -1412,7 +1413,12 @@ class Listener(QObject):
                 self.status.emit("processando")
             try:
                 audio = self.normalizar(audio)
-                text = rec.recognize_google(sr.AudioData(audio, self.RATE, 2), language="pt-BR")
+                res = rec.recognize_google(sr.AudioData(audio, self.RATE, 2), language="pt-BR", show_all=True)
+                alts = [a.get("transcript", "") for a in (res.get("alternative", []) if isinstance(res, dict) else [])]
+                alts = [a for a in alts if a.strip()]
+                if not alts:
+                    raise sr.UnknownValueError()
+                text = alts[0]
             except sr.UnknownValueError:
                 if forced:
                     self.force = False
@@ -1427,7 +1433,7 @@ class Listener(QObject):
                 continue
             self.force = False
             if text:
-                self.heard.emit(text, forced)
+                self.heard.emit(text, forced, alts[1:])
 
 
 # ----------------------------------------------------------------------------
@@ -2203,6 +2209,9 @@ class RobotWindow(QWidget):
         self.voice.talking_changed.connect(self.on_talking)
         self.listener = Listener(cfg, self.voice.busy)
         self.listener.heard.connect(self.on_heard)
+        self.conversa_ate, self.ai_esperando = 0.0, False
+        self.conversa_timer = QTimer(self); self.conversa_timer.timeout.connect(self.check_conversa)
+        self.conversa_timer.start(1000)
         self.listener.status.connect(self.on_listen_status)
         self.listener.level.connect(self.on_mic_level)
         self.mic_level = 0.0
@@ -2324,9 +2333,12 @@ class RobotWindow(QWidget):
             self.bubble_until = max(self.bubble_until, self.m.t + 1.5)
         else:
             self.bubble_until = min(self.bubble_until, self.m.t + 2.5) if self.bubble_kind == "say" else self.bubble_until
-            if self.listen_after_speech:
+            if self.em_conversa():          # terminou de falar: continua atento esperando a proxima fala
+                self.conversa_ate = max(self.conversa_ate, time.monotonic() + self.CONVERSA_SEG)
+            if self.listen_after_speech and not self.em_conversa():
                 self.listen_after_speech = False
                 QTimer.singleShot(250, self.start_listening)
+            self.listen_after_speech = False
 
     # ---------- acoes e expressoes ----------
     DUR = {"clock": 10.0, "scratch": 6.0, "think": 7.0, "wave": 4.0, "present": 3.0, "water": 6.0,
@@ -2422,7 +2434,7 @@ class RobotWindow(QWidget):
         if self.sleeping:
             fx.add("zzz")
         m.fx = fx
-        m.listening = self.listening
+        m.listening = self.listening or (self.em_conversa() and not m.talking and not self.ai_esperando)
         self.mic_level *= 0.85
         m.mic = self.mic_level
 
@@ -2533,7 +2545,7 @@ class RobotWindow(QWidget):
         else:
             msg = f"{saud}, {self.nome}! Que bom te ver. Estou aqui se precisar."
         if "--reiniciar" in sys.argv:
-            msg = f"Pronto, {self.nome}! Fui atualizado para a versão {VERSAO}. Agora respondo mais rápido e com essa voz mais suave. Gostou?"
+            msg = f"Pronto, {self.nome}! Fui atualizado para a versão {VERSAO}. Agora é só dizer {self.cfg['nome_robo']} que eu fico atento, e quando terminar diga: obrigado, {self.cfg['nome_robo']}."
         if saud == "Bom dia":
             self.cfg["ultima_saudacao"] = now.date().isoformat()
         save_config(self.cfg)
@@ -2622,32 +2634,86 @@ class RobotWindow(QWidget):
         if st in msgs:
             self.show_status(msgs[st], 5)
 
-    def on_heard(self, text, forced):
-        log.info("ouviu (%s): %s", "clique" if forced else "continuo", text)
-        if not forced:
-            import difflib
-            n = norm(text)
-            words = re.findall(r"[\w']+", n)
-            wake = [norm(w) for w in self.cfg.get("palavras_ativacao", [])] + ["bravus", "bravos", "brabos", "brabus", "brabo", "bravo"]
-            idx = None
-            for i, w in enumerate(words):
-                cand = [w] + ([w + words[i + 1]] if i + 1 < len(words) else [])
-                if any(c in wake or difflib.SequenceMatcher(None, c, "bravus").ratio() >= 0.66 for c in cand):
-                    idx = i
-                    break
-            if idx is None:
+    # ---------- modo conversa ----------
+    CONVERSA_SEG = 30   # depois de responder, fica atento por 30 s sem precisar dizer "Bravus" de novo
+    FIM = re.compile(r"\b(obrigad[oa]|brigad[oa]|valeu|agradeco|pode parar|para de (me )?(escutar|ouvir)|"
+                     r"tchau|ate (mais|logo|depois)|so isso|e so isso|encerra(r)?|pode descansar)\b")
+
+    def em_conversa(self):
+        return time.monotonic() < self.conversa_ate
+
+    def abrir_conversa(self):
+        self.conversa_ate = max(self.conversa_ate, time.monotonic() + self.CONVERSA_SEG)
+        self.listener.conversa = True
+
+    def fechar_conversa(self):
+        self.conversa_ate = 0.0
+        self.listener.conversa = False
+
+    def check_conversa(self):
+        if self.listener.conversa and not self.em_conversa():
+            if self.voice.busy() or self.ai_esperando:
+                self.conversa_ate = time.monotonic() + 5     # ainda respondendo: espera
+                return
+            self.fechar_conversa()
+            if self.bubble_until < self.m.t:
+                self.show_status(f"Se precisar, é só dizer {self.cfg['nome_robo']}.", 3)
+
+    def _acha_ativacao(self, text):
+        """Procura a palavra Bravus; devolve o resto da frase (sem o nome) ou None."""
+        import difflib
+        words = re.findall(r"[\w']+", norm(text))
+        wake = [norm(w) for w in self.cfg.get("palavras_ativacao", [])] + ["bravus", "bravos", "brabos", "brabus", "brabo", "bravo"]
+        for i, w in enumerate(words):
+            cand = [w] + ([w + words[i + 1]] if i + 1 < len(words) else [])
+            if any(c in wake or difflib.SequenceMatcher(None, c, "bravus").ratio() >= 0.66 for c in cand):
+                pula = 1
+                if i + 1 < len(words) and difflib.SequenceMatcher(None, w + words[i + 1], "bravus").ratio() > 0.9 \
+                        and w not in wake:
+                    pula = 2
+                return " ".join(words[:i] + words[i + pula:]).strip()
+        return None
+
+    def on_heard(self, text, forced, alts=None):
+        log.info("ouviu (%s%s): %s", "clique" if forced else "continuo", ", conversa" if self.em_conversa() else "", text)
+        conversa = self.em_conversa()
+        resto = self._acha_ativacao(text)
+        if resto is None and not forced:
+            for a in alts or []:                 # o Google as vezes ouve "brabo": confere as outras possibilidades
+                resto = self._acha_ativacao(a)
+                if resto is not None:
+                    text = a; break
+        chamou = resto is not None
+        n = norm(text)
+        palavras = re.findall(r"[\w']+", n)
+        # "obrigado, Bravus" / "valeu" / "pode parar": encerra a conversa e para de escutar
+        if (chamou or conversa or forced) and self.FIM.search(n) and len(palavras) <= 6 \
+                and not getattr(self, "pending_confirm", None):
+            self.fechar_conversa()
+            self.listening = False
+            self.listener.force = False
+            self.say(random.choice([f"Por nada, {self.nome}! Qualquer coisa é só me chamar.",
+                                    f"Disponha, {self.nome}! Tô por aqui.",
+                                    f"Imagina, {self.nome}! Quando precisar, é só dizer {self.cfg['nome_robo']}."]), "wave")
+            return
+        if not chamou and not forced:
+            if not conversa:
                 log.info("ouviu sem a palavra Bravus: %s", text)
                 return
-            rest = " ".join(words[idx + 1:]).strip()
-            if rest and difflib.SequenceMatcher(None, words[idx] + (words[idx + 1] if idx + 1 < len(words) else ""), "bravus").ratio() > 0.9:
-                rest = " ".join(words[idx + 2:]).strip()
-            if len(rest) < 2:
-                self.set_expr("happy", 1.5)
-                self.start_listening()
-                return
-            text = rest
+            if len(palavras) < 2 and not getattr(self, "pending_confirm", None):
+                return                            # som solto / barulho: ignora
+            resto = text
+        if forced and not chamou:
+            resto = text
+        self.abrir_conversa()
         self.listening = False
-        self.handle_text(text)
+        if len((resto or "").strip()) < 2:        # disse so "Bravus": fica atento na hora
+            self.voice.stop()
+            self.voice.beep()
+            self.set_expr("happy", 1.5)
+            self.show_status(f"Pode falar, {self.nome}...", 4)
+            return
+        self.handle_text(resto)
 
     # ---------- conversa ----------
     def handle_text(self, text):
@@ -2676,6 +2742,7 @@ class RobotWindow(QWidget):
                 self.do_action("think")
                 self.action_until = self.m.t + 40
                 self.voice.stop()
+                self.ai_esperando = True
                 self.ai_buf, self.ai_falando, self.ai_dito = "", False, ""
                 self.ai_req = self.ai.ask(text)
             else:
@@ -2788,6 +2855,7 @@ class RobotWindow(QWidget):
         import urllib.parse
         if rid != self.ai_req:
             return
+        self.ai_esperando = False
         for tipo, valor in re.findall(r"\[(SITE|PESQUISAR|YOUTUBE):\s*([^\]]+)\]", text, re.I):
             tipo, valor = tipo.upper(), valor.strip()
             if tipo == "SITE" and re.match(r"https?://", valor):
@@ -3036,6 +3104,7 @@ class RobotWindow(QWidget):
         else:
             self.voice.stop()
             self.stop_listening()
+            self.fechar_conversa()
             self.water_timer.stop()
             self.hide()
             if self.tray:
