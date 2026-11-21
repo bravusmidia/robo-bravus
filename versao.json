@@ -1,6 +1,6 @@
 {
-  "versao": "1.14.0",
-  "notas": "Acoes do menu sempre funcionam e duram mais; nao acorda com palavras parecidas (Brasil); nao inventa que fez coisas; atualizar sistema por voz; microfone recalibra com barulho.",
+  "versao": "1.15.0",
+  "notas": "Busca qualquer informacao na internet e responde falando; ouve melhor o Bravus e nao perde o que voce fala logo depois.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",

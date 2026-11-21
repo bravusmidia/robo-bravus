@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.14.0"
+VERSAO = "1.15.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -65,6 +65,8 @@ DEFAULTS = {
     "atualizacao_automatica": True,
     "url_atualizacao": "https://raw.githubusercontent.com/bravusmidia/robo-bravus/main/",
     "fuso_horario": -3,
+    "cidade": "Fortaleza - CE",
+    "ia_busca": True,         # IA pesquisa na internet para responder (clima, noticias, precos...)
     "relogio_fixo": False,
     "primeira_vez": True,
     "ultima_saudacao": "",
@@ -427,6 +429,9 @@ class Brain:
         m = re.search(r"(?:pesquis\w*|procur\w*|busc\w*|toca|tocar|coloca)(?: no google| no youtube)?(?: sobre| por)? (.+)", n)
         if m:
             q = m.group(1).replace("no youtube", "").replace("no google", "").strip()
+            tem_ia = bool(self.cfg.get("ia_chave_gemini", "").strip() or self.cfg.get("ia_chave_anthropic", "").strip())
+            if q and tem_ia and not has("youtube", "toca", "tocar", "musica", "abre", "abrir", "mostra", "no google"):
+                return None          # a IA pesquisa na internet e responde falando
             if q:
                 if "youtube" in n or has("toca", "tocar", "musica"):
                     url = "https://www.youtube.com/results?search_query=" + q.replace(" ", "+")
@@ -746,12 +751,17 @@ class AIWorker(QObject):
                 f"(pode usar 'pra', 'tá', 'beleza'). Comece já respondendo, sem enrolar e sem repetir a pergunta. "
                 f"Seja curto: de 1 a 2 frases (no máximo 3 se precisar mesmo), porque a resposta será falada em voz alta. "
                 f"Não use emojis, listas, asteriscos nem markdown.{estilo} "
-                f"Seja sempre sincero: você NÃO acessa contas, arquivos, dados, e-mails nem sistemas, e não atualiza nada. "
+                f"{nome} mora em {self.cfg.get('cidade', 'Fortaleza - CE')}; use esse local quando a pergunta depender de onde ele está "
+                f"(clima, horários, lugares). "
+                + (f"Você pode pesquisar na internet: para clima, notícias, jogos, preços, cotações, datas, endereços ou qualquer "
+                   f"informação atual, pesquise e responda falando a informação exata (números e nomes), sem mandar ele procurar. "
+                   if self.cfg.get("ia_busca", True) else "") +
+                f"Seja sempre sincero: você NÃO acessa contas, arquivos, e-mails nem sistemas dele, e não atualiza nada. "
                 f"Nunca diga que está fazendo, abrindo ou atualizando algo que você não consegue fazer; nesse caso explique "
                 f"numa frase o que você consegue fazer. Se a frase parecer solta, sem sentido ou conversa com outra pessoa, "
                 f"pergunte curto o que ele precisa. "
-                f"A única coisa que você controla é o navegador, e SÓ quando ele pedir claramente para abrir, mostrar, tocar "
-                f"ou pesquisar algo: aí responda curto e coloque no final UMA destas marcações: [SITE:https://endereco] para abrir um site, "
+                f"No computador você só controla o navegador, e SÓ quando ele pedir claramente para ABRIR, MOSTRAR ou TOCAR "
+                f"algo na tela (perguntas de informação você responde falando, sem abrir nada): aí responda curto e coloque no final UMA destas marcações: [SITE:https://endereco] para abrir um site, "
                 f"[PESQUISAR:termo] para pesquisar no Google ou [YOUTUBE:termo] para procurar no YouTube.")
 
     # modos para responder rapido (sem "pensar" demais); o primeiro que o modelo aceitar fica salvo
@@ -775,6 +785,8 @@ class AIWorker(QObject):
             gen.update(self.RAPIDO[modo])
             body = {"system_instruction": {"parts": [{"text": self.system_prompt()}]}, "contents": contents,
                     "generationConfig": gen}
+            if self.cfg.get("ia_busca", True) and not getattr(self, "_sem_busca", False):
+                body["tools"] = [{"google_search": {}}]
             return http_sse(f"{base}models/{model}:streamGenerateContent?alt=sse", body, hdr, timeout=20)
 
         modo = int(self.cfg.get("ia_modo_rapido", 0))
@@ -810,6 +822,11 @@ class AIWorker(QObject):
                     continue
                 chave_ruim = any(x in msg for x in ("api key not valid", "api_key_invalid", "api key expired",
                                                      "permission_denied", "401"))
+                if "400" in msg and not chave_ruim and not getattr(self, "_sem_busca", False) \
+                        and any(x in msg for x in ("tool", "search", "grounding")):
+                    self._sem_busca = True      # esse modelo nao aceita a busca: responde sem ela
+                    log.warning("IA: busca na internet indisponivel neste modelo")
+                    continue
                 if "400" in msg and not chave_ruim:
                     # o modelo nao aceitou alguma configuracao: tenta um modo mais simples, depois outro modelo
                     if modo < len(self.RAPIDO) - 1:
@@ -838,8 +855,17 @@ class AIWorker(QObject):
         msgs.append({"role": "user", "content": text})
         body = {"model": self.cfg.get("ia_modelo", "claude-haiku-5-5"), "max_tokens": 300,
                 "system": self.system_prompt(), "messages": msgs, "stream": True}
-        evs = http_sse("https://api.anthropic.com/v1/messages", body,
-                       {"x-api-key": self.cfg["ia_chave_anthropic"].strip(), "anthropic-version": "2023-06-01"})
+        if self.cfg.get("ia_busca", True) and not getattr(self, "_sem_busca_claude", False):
+            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}]
+        hdr = {"x-api-key": self.cfg["ia_chave_anthropic"].strip(), "anthropic-version": "2023-06-01"}
+        try:
+            evs = http_sse("https://api.anthropic.com/v1/messages", body, hdr)
+        except RuntimeError as e:
+            if "tools" in body and "400" in str(e):
+                self._sem_busca_claude = True; body.pop("tools")
+                evs = http_sse("https://api.anthropic.com/v1/messages", body, hdr)
+            else:
+                raise
         out = []
         for ev in evs:
             if ev.get("type") == "error":
@@ -1396,6 +1422,8 @@ class Listener(QObject):
         self.ambient = 200.0
         self.threshold = 500.0
         self.ok = True
+        import queue
+        self._rq = queue.Queue()
         self.conversa = False      # modo conversa: continua ouvindo mesmo sem a escuta continua ligada
         self._last_net_err = 0
         threading.Thread(target=self._loop, daemon=True).start()
@@ -1508,7 +1536,12 @@ class Listener(QObject):
             if not need:
                 self._close(); time.sleep(0.25); continue
             if self.is_busy():
-                time.sleep(0.15); continue
+                try:       # robo falando: descarta o audio (para nao ouvir a propria voz depois)
+                    if self.stream is not None and self.stream.read_available:
+                        self.stream.read(self.stream.read_available)
+                except Exception:
+                    pass
+                time.sleep(0.1); continue
             try:
                 if self.stream is None:
                     self._open()
@@ -1527,7 +1560,17 @@ class Listener(QObject):
                     self.status.emit("nada")
                 continue
             if forced:
+                self.force = False
                 self.status.emit("processando")
+            # o reconhecimento roda em outra linha: o microfone continua gravando enquanto o Google entende
+            self._rq.put((audio, forced))
+            if not getattr(self, "_rec_on", False):
+                self._rec_on = True
+                threading.Thread(target=self._rec_loop, args=(rec, sr), daemon=True).start()
+
+    def _rec_loop(self, rec, sr):
+        while self.running:
+            audio, forced = self._rq.get()
             try:
                 audio = self.normalizar(audio)
                 res = rec.recognize_google(sr.AudioData(audio, self.RATE, 2), language="pt-BR", show_all=True)
@@ -1538,17 +1581,14 @@ class Listener(QObject):
                 text = alts[0]
             except sr.UnknownValueError:
                 if forced:
-                    self.force = False
                     self.status.emit("nada")
                 continue
             except Exception as e:
                 log.warning("reconhecimento: %s", e)
                 if forced or time.time() - self._last_net_err > 300:
                     self._last_net_err = time.time()
-                    self.force = False
                     self.status.emit("erro_rede")
                 continue
-            self.force = False
             if text:
                 self.heard.emit(text, forced, alts[1:])
 
@@ -2858,6 +2898,19 @@ class RobotWindow(QWidget):
             if self.bubble_until < self.m.t:
                 self.show_status(f"Se precisar, é só dizer {self.cfg['nome_robo']}.", 3)
 
+    @staticmethod
+    def _som(w):
+        w = w.replace("v", "b").replace("ç", "s")
+        w = re.sub(r"s$", "", w)
+        return re.sub(r"^[cgp](?=rab)", "b", w)
+
+    def _parece_bravus(self, c, wake):
+        import difflib
+        if c in wake:
+            return True
+        k = self._som(c)
+        return k in ("brabu", "brabo", "braba", "brabi") or difflib.SequenceMatcher(None, k, "brabu").ratio() >= 0.8
+
     def _acha_ativacao(self, text):
         """Procura a palavra Bravus; devolve o resto da frase (sem o nome) ou None."""
         import difflib
@@ -2865,7 +2918,7 @@ class RobotWindow(QWidget):
         wake = [norm(w) for w in self.cfg.get("palavras_ativacao", [])] + ["bravus", "bravos", "brabos", "brabus", "brabo", "bravo"]
         for i, w in enumerate(words):
             cand = [w] + ([w + words[i + 1]] if i + 1 < len(words) else [])
-            if any(c in wake or difflib.SequenceMatcher(None, c, "bravus").ratio() >= 0.78 for c in cand):
+            if any(self._parece_bravus(c, wake) for c in cand):
                 pula = 1
                 if i + 1 < len(words) and difflib.SequenceMatcher(None, w + words[i + 1], "bravus").ratio() > 0.9 \
                         and w not in wake:
