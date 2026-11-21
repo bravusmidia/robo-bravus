@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.13.0"
+VERSAO = "1.14.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -368,8 +368,10 @@ class Brain:
         # Atualizar o proprio robo por voz
         if (has("se atualiza", "se atualizar", "atualiza voce", "atualize voce", "atualiza o robo", "atualizar o robo",
                 "procura atualizacao", "procurar atualizacao", "busca atualizacao", "tem atualizacao",
-                "nova versao", "atualiza ai", "atualize se", "atualize-se", "se atualize")
-                and "pagina" not in n):
+                "nova versao", "atualiza ai", "atualize se", "atualize-se", "se atualize",
+                "atualizar sistema", "atualiza o sistema", "atualizar o sistema", "atualize o sistema",
+                "atualiza seu sistema", "atualizar seu sistema", "atualiza sistema", "atualizar voce")
+                or (re.match(r"atualiz", n) and len(n.split()) <= 4)) and "pagina" not in n:
             return r(f"Certo, {nome}! Vou procurar uma versão nova agora.", "think", update=True)
         if has("qual sua versao", "qual a sua versao", "que versao", "versao voce"):
             return r(f"Estou na versão {VERSAO}, {nome}.", "present")
@@ -744,8 +746,12 @@ class AIWorker(QObject):
                 f"(pode usar 'pra', 'tá', 'beleza'). Comece já respondendo, sem enrolar e sem repetir a pergunta. "
                 f"Seja curto: de 1 a 2 frases (no máximo 3 se precisar mesmo), porque a resposta será falada em voz alta. "
                 f"Não use emojis, listas, asteriscos nem markdown.{estilo} "
-                f"Você controla o navegador do computador: se ele pedir para abrir, mostrar, tocar ou procurar algo na internet, "
-                f"responda curto e coloque no final UMA destas marcações: [SITE:https://endereco] para abrir um site, "
+                f"Seja sempre sincero: você NÃO acessa contas, arquivos, dados, e-mails nem sistemas, e não atualiza nada. "
+                f"Nunca diga que está fazendo, abrindo ou atualizando algo que você não consegue fazer; nesse caso explique "
+                f"numa frase o que você consegue fazer. Se a frase parecer solta, sem sentido ou conversa com outra pessoa, "
+                f"pergunte curto o que ele precisa. "
+                f"A única coisa que você controla é o navegador, e SÓ quando ele pedir claramente para abrir, mostrar, tocar "
+                f"ou pesquisar algo: aí responda curto e coloque no final UMA destas marcações: [SITE:https://endereco] para abrir um site, "
                 f"[PESQUISAR:termo] para pesquisar no Google ou [YOUTUBE:termo] para procurar no YouTube.")
 
     # modos para responder rapido (sem "pensar" demais); o primeiro que o modelo aceitar fica salvo
@@ -1377,7 +1383,8 @@ class Listener(QObject):
 
     def _thr(self):
         mult, mn, mx = self.SENS.get(self.cfg.get("sensibilidade_mic", "alta"), self.SENS["alta"])
-        return min(mx, max(mn, self.ambient * mult))
+        # o teto ajuda a ouvir de longe, mas o limite nunca pode ficar abaixo do proprio ruido do ambiente
+        return max(min(mx, max(mn, self.ambient * mult)), self.ambient * 1.25)
 
     def __init__(self, cfg, is_busy):
         super().__init__()
@@ -1423,6 +1430,9 @@ class Listener(QObject):
         self.stream = sd.RawInputStream(samplerate=self.RATE, channels=1, dtype="int16", blocksize=self.BLOCK,
                                         device=dev if dev not in ("", None) else None)
         self.stream.start()
+        t0 = time.monotonic()
+        while self.is_busy() and time.monotonic() - t0 < 15:   # nao mede o ruido com o robo falando
+            self.stream.read(self.BLOCK)
         vals = []
         for _ in range(20):
             data, _ = self.stream.read(self.BLOCK)
@@ -1474,6 +1484,11 @@ class Listener(QObject):
                     silence += 1
                 if silence > 14 or len(frames) > 400:
                     break
+        if len(frames) > 400:     # ouviu 12 s sem parar: o "silencio" estava alto demais -> recalibra o ruido
+            nivs = sorted(self.rms(f) for f in frames)
+            self.ambient = max(self.ambient, nivs[len(nivs) // 3])
+            self.threshold = self._thr()
+            log.info("ruido recalibrado: %.0f, limite %.0f", self.ambient, self.threshold)
         if voiced < 8:
             return None
         return b"".join(frames)
@@ -2460,6 +2475,33 @@ class RobotWindow(QWidget):
             self.set_expr("happy", 2.5); return
         self.action, self.action_until = a, self.m.t + self.DUR.get(a, 3.0)
 
+    # acoes escolhidas no menu: tem prioridade, duram mais e a rotina automatica espera
+    DUR_MENU = {"scratch": 10.0, "think": 12.0, "wave": 8.0, "stretch": 8.0, "dance": 20.0, "jump": 8.0, "look": 10.0}
+    ICONE_MENU = {"sit": "🪑", "stand": "🚀", "scratch": "🤔", "think": "💭", "wave": "👋", "stretch": "🙆",
+                  "dance": "💃", "jump": "⬆️", "look": "👀", "sleep": "😴"}
+
+    def acao_menu(self, a, label=""):
+        self._parar_cena()
+        self.listening = False
+        self.listener.force = False
+        self.voice.stop()
+        self._napping = False
+        self.last_interaction = time.monotonic()
+        if a == "sleep":
+            self.action = None
+            self.go_sleep()
+        else:
+            self.sleeping = False
+            if a == "sit":
+                self.base_sit = True; self.set_expr("happy", 2)
+            elif a == "stand":
+                self.base_sit = False; self.set_expr("happy", 2)
+            else:
+                self.action, self.action_until = a, self.m.t + self.DUR_MENU.get(a, 8.0)
+        self.show_status(f"{self.ICONE_MENU.get(a, '')}  {label}".strip(), 2.5)
+        self.next_idle = self.m.t + 60     # a rotina automatica so volta daqui a 1 minuto
+        log.info("acao do menu: %s", a)
+
     def go_sleep(self):
         self.sleeping = True
         self.base_sit = True
@@ -2784,7 +2826,7 @@ class RobotWindow(QWidget):
             self.show_status(msgs[st], 5)
 
     # ---------- modo conversa ----------
-    CONVERSA_SEG = 30   # depois de responder, fica atento por 30 s sem precisar dizer "Bravus" de novo
+    CONVERSA_SEG = 15   # depois de responder, fica atento por 15 s sem precisar dizer "Bravus" de novo
     FIM = re.compile(r"\b(obrigad[oa]|brigad[oa]|valeu|agradeco|pode parar|para de (me )?(escutar|ouvir)|"
                      r"tchau|ate (mais|logo|depois)|so isso|e so isso|encerra(r)?|pode descansar)\b")
 
@@ -2823,7 +2865,7 @@ class RobotWindow(QWidget):
         wake = [norm(w) for w in self.cfg.get("palavras_ativacao", [])] + ["bravus", "bravos", "brabos", "brabus", "brabo", "bravo"]
         for i, w in enumerate(words):
             cand = [w] + ([w + words[i + 1]] if i + 1 < len(words) else [])
-            if any(c in wake or difflib.SequenceMatcher(None, c, "bravus").ratio() >= 0.66 for c in cand):
+            if any(c in wake or difflib.SequenceMatcher(None, c, "bravus").ratio() >= 0.78 for c in cand):
                 pula = 1
                 if i + 1 < len(words) and difflib.SequenceMatcher(None, w + words[i + 1], "bravus").ratio() > 0.9 \
                         and w not in wake:
@@ -3104,7 +3146,7 @@ class RobotWindow(QWidget):
         for label, a in (("Sentar", "sit"), ("Levantar / flutuar", "stand"), ("Coçar a cabeça", "scratch"),
                          ("Pensar", "think"), ("Acenar", "wave"), ("Espreguiçar", "stretch"), ("Dançar", "dance"),
                          ("Pular", "jump"), ("Olhar em volta", "look"), ("Dormir", "sleep")):
-            add(label, lambda _=False, a=a: (self.do_action(a), a != "sleep" and setattr(self, "sleeping", False)), menu=acts)
+            add(label, lambda _=False, a=a, l=label: self.acao_menu(a, l), menu=acts)
         add("Me lembrar de beber água agora", self.water_reminder, menu=acts)
         mn.addSeparator()
         add(f"💧  Lembrete de água ({int(self.cfg.get('lembrete_agua_min', 30))} min)", self.toggle_water,

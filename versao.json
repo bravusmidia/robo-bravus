@@ -1,6 +1,6 @@
 {
-  "versao": "1.13.0",
-  "notas": "Mao na orelha quando voce diz Bravus; pensa mais rapido (conexao com a IA ja aberta e comeca a falar na primeira virgula).",
+  "versao": "1.14.0",
+  "notas": "Acoes do menu sempre funcionam e duram mais; nao acorda com palavras parecidas (Brasil); nao inventa que fez coisas; atualizar sistema por voz; microfone recalibra com barulho.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
