@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.9.2"
+VERSAO = "1.10.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -54,7 +54,7 @@ DEFAULTS = {
     "voz": "pt-BR-AntonioNeural",
     "voz_velocidade": "+4%",
     "voz_tom": "+28Hz",
-    "efeito_voz": "menino",
+    "efeito_voz": "suave",
     "mudo": False,
     "comportamentos_aleatorios": True,
     "ia_chave_anthropic": "",
@@ -531,14 +531,85 @@ def http_json(url, body=None, headers=None, timeout=40):
         return out
 
 
+def http_sse(url, body, headers=None, timeout=25):
+    """POST JSON e devolve os eventos SSE (data: {...}) conforme chegam -> o robo fala antes da IA terminar.
+    O 1o evento ja vem lido aqui dentro, assim erros HTTP aparecem na hora (para as novas tentativas)."""
+    import urllib.request, urllib.error
+    headers = dict(headers or {})
+    headers["content-type"] = "application/json"
+    data = json.dumps(body).encode("utf-8")
+
+    def eventos(linhas):
+        for ln in linhas:
+            ln = ln.decode("utf-8", "ignore").strip() if isinstance(ln, bytes) else ln.strip()
+            if ln.startswith("data:"):
+                ln = ln[5:].strip()
+                if ln and ln != "[DONE]":
+                    try:
+                        yield json.loads(ln)
+                    except ValueError:
+                        pass
+
+    def com_primeiro(gen):
+        primeiro = next(gen, None)
+        def tudo():
+            if primeiro is not None:
+                yield primeiro
+            yield from gen
+        return tudo()
+
+    try:
+        req = urllib.request.Request(url, data=data, headers=headers)
+        r = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code}: {e.read().decode('utf-8', 'ignore')[:300]}")
+    except Exception as e:
+        curl = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "curl.exe")
+        if sys.platform != "win32" or not os.path.exists(curl):
+            raise
+        log.info("python sem acesso (%s); usando curl (stream)", e)
+        cmd = [curl, "-sS", "-N", "-m", str(timeout + 30), url, "-w", "\n__HTTP__%{http_code}"]
+        for k, v in headers.items():
+            cmd += ["-H", f"{k}: {v}"]
+        cmd += ["--data-binary", "@-"]
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             creationflags=0x08000000)
+        p.stdin.write(data); p.stdin.close()
+        resto = []
+
+        def linhas():
+            for ln in p.stdout:
+                s = ln.decode("utf-8", "ignore")
+                if s.startswith("__HTTP__"):
+                    cod = s[8:].strip()
+                    if cod and not cod.startswith("2"):
+                        raise RuntimeError(f"HTTP {cod}: {''.join(resto)[:300]}")
+                    continue
+                if not s.startswith("data:") and s.strip():
+                    resto.append(s)
+                yield s
+            p.wait()
+            if p.returncode:
+                raise RuntimeError(p.stderr.read().decode("utf-8", "ignore")[-300:])
+        return com_primeiro(eventos(linhas()))
+
+    def linhas_py():
+        with r:
+            for ln in r:
+                yield ln
+    return com_primeiro(eventos(linhas_py()))
+
+
 class AIWorker(QObject):
     """Cerebro de IA: Gemini (Google, tem plano gratis) ou Claude (Anthropic, pago por uso)."""
-    answered = Signal(str)
+    answered = Signal(int, str)   # (id do pedido, resposta completa)
+    delta = Signal(int, str)      # (id do pedido, pedacinho da resposta) -> o robo ja vai falando
 
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
         self.history = []   # [(pergunta, resposta)]
+        self.req = 0
 
     def provider(self):
         if self.cfg.get("ia_chave_gemini", "").strip():
@@ -551,7 +622,9 @@ class AIWorker(QObject):
         return self.provider() is not None
 
     def ask(self, text):
-        threading.Thread(target=self._run, args=(text,), daemon=True).start()
+        self.req += 1
+        threading.Thread(target=self._run, args=(self.req, text), daemon=True).start()
+        return self.req
 
     def system_prompt(self):
         nome, robo = self.cfg["nome_usuario"], self.cfg["nome_robo"]
@@ -560,12 +633,14 @@ class AIWorker(QObject):
         if self.cfg.get("efeito_voz") == "guerreiro":
             estilo = (" Nesta voz você fala como um guerreiro orgulhoso e determinado: frases firmes, confiantes, "
                       "com atitude e um toque de provocação amigável, mas sempre respeitoso e leal a " + nome + ".")
-        return (f"Você é o {robo}, um robozinho assistente com jeito de menino, simpático e educado, que flutua "
+        return (f"Você é o {robo}, um robozinho assistente simpático, calmo e educado, que flutua "
                 f"na tela do computador de {nome}, CEO da agência Bravus Mídia (marketing digital, tráfego pago, "
                 f"sites, landing pages, automações e mentoria). Hoje é {DIAS[agr.weekday()]}, "
                 f"{agr.day}/{agr.month}/{agr.year}, {agr.hour}h{agr.minute:02d}. "
                 f"Responda a qualquer pergunta, sobre qualquer assunto, sempre em português do Brasil, e chame-o de {nome}. "
-                f"Seja direto: no máximo 3 frases curtas, porque a resposta será falada em voz alta. "
+                f"Fale como numa conversa de verdade, de um jeito leve e natural, como um amigo falaria "
+                f"(pode usar 'pra', 'tá', 'beleza'). Comece já respondendo, sem enrolar e sem repetir a pergunta. "
+                f"Seja curto: de 1 a 2 frases (no máximo 3 se precisar mesmo), porque a resposta será falada em voz alta. "
                 f"Não use emojis, listas, asteriscos nem markdown.{estilo} "
                 f"Você controla o navegador do computador: se ele pedir para abrir, mostrar, tocar ou procurar algo na internet, "
                 f"responda curto e coloque no final UMA destas marcações: [SITE:https://endereco] para abrir um site, "
@@ -575,7 +650,7 @@ class AIWorker(QObject):
     RAPIDO = [{"thinkingConfig": {"thinkingBudget": 0}}, {"thinkingConfig": {"thinkingLevel": "minimal"}},
               {"thinkingConfig": {"thinkingLevel": "low"}}, {}]
 
-    def _gemini(self, text):
+    def _gemini(self, text, on_delta):
         key = self.cfg["ia_chave_gemini"].strip()
         contents = []
         for q, a in self.history[-6:]:
@@ -588,11 +663,11 @@ class AIWorker(QObject):
             model = "gemini-flash-lite-latest"
 
         def call(model, modo):
-            gen = {"maxOutputTokens": 300, "temperature": 0.7}
+            gen = {"maxOutputTokens": 220, "temperature": 0.8}
             gen.update(self.RAPIDO[modo])
             body = {"system_instruction": {"parts": [{"text": self.system_prompt()}]}, "contents": contents,
                     "generationConfig": gen}
-            return http_json(f"{base}models/{model}:generateContent", body, hdr, timeout=25)
+            return http_sse(f"{base}models/{model}:streamGenerateContent?alt=sse", body, hdr, timeout=20)
 
         modo = int(self.cfg.get("ia_modo_rapido", 0))
         tentativas = 0
@@ -640,44 +715,69 @@ class AIWorker(QObject):
                 raise
         if self.cfg.get("ia_modelo_gemini") != model or self.cfg.get("ia_modo_rapido") != modo:
             self.cfg["ia_modelo_gemini"] = model; self.cfg["ia_modo_rapido"] = modo; save_config(self.cfg)
-        parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
-        return "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+        out = []
+        for ev in data:
+            parts = (ev.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+            t = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+            if t:
+                out.append(t); on_delta(t)
+        return "".join(out).strip()
 
-    def _anthropic(self, text):
+    def _anthropic(self, text, on_delta):
         msgs = []
         for q, a in self.history[-6:]:
             msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
         msgs.append({"role": "user", "content": text})
-        body = {"model": self.cfg.get("ia_modelo", "claude-haiku-5-5"), "max_tokens": 400,
-                "system": self.system_prompt(), "messages": msgs}
-        data = http_json("https://api.anthropic.com/v1/messages", body,
-                         {"x-api-key": self.cfg["ia_chave_anthropic"].strip(), "anthropic-version": "2023-06-01"})
-        return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        body = {"model": self.cfg.get("ia_modelo", "claude-haiku-5-5"), "max_tokens": 300,
+                "system": self.system_prompt(), "messages": msgs, "stream": True}
+        evs = http_sse("https://api.anthropic.com/v1/messages", body,
+                       {"x-api-key": self.cfg["ia_chave_anthropic"].strip(), "anthropic-version": "2023-06-01"})
+        out = []
+        for ev in evs:
+            if ev.get("type") == "error":
+                raise RuntimeError(str(ev.get("error"))[:300])
+            t = (ev.get("delta") or {}).get("text", "") if ev.get("type") == "content_block_delta" else ""
+            if t:
+                out.append(t); on_delta(t)
+        return "".join(out).strip()
 
-    def _run(self, text):
+    def _run(self, rid, text):
         nome = self.cfg["nome_usuario"]
         self._trocou = False
+        parcial = []
+        t0 = time.monotonic()
+
+        def on_delta(t):
+            if not parcial:
+                log.info("IA: primeira resposta em %.1fs", time.monotonic() - t0)
+            parcial.append(t)
+            self.delta.emit(rid, re.sub(r"[*#_`]", "", t))
+        emit = lambda m: self.answered.emit(rid, m)
         try:
-            out = self._gemini(text) if self.provider() == "gemini" else self._anthropic(text)
+            out = self._gemini(text, on_delta) if self.provider() == "gemini" else self._anthropic(text, on_delta)
             out = re.sub(r"[*#_`]", "", out).strip()
+            log.info("IA: resposta completa em %.1fs", time.monotonic() - t0)
             if out:
                 self.history.append((text, out))
-            self.answered.emit(out or f"Hmm, não consegui pensar numa resposta agora, {nome}.")
+            emit(out or f"Hmm, não consegui pensar numa resposta agora, {nome}.")
         except Exception as e:
             log.warning("IA falhou: %s", e)
+            if parcial:     # a resposta ja estava sendo falada: termina com o que chegou
+                emit(re.sub(r"[*#_`]", "", "".join(parcial)).strip())
+                return
             msg = str(e)
             if any(x in msg.lower() for x in ("503", "unavailable", "high demand", "overloaded")):
-                self.answered.emit(f"{nome}, a inteligência artificial do Google está muito ocupada agora. Me pergunta de novo daqui a pouquinho.")
+                emit(f"{nome}, a inteligência artificial do Google está muito ocupada agora. Me pergunta de novo daqui a pouquinho.")
             elif "429" in msg or "quota" in msg.lower():
-                self.answered.emit(f"{nome}, usei todas as perguntas grátis por agora. Daqui a pouco eu volto a responder.")
+                emit(f"{nome}, usei todas as perguntas grátis por agora. Daqui a pouco eu volto a responder.")
             elif any(x in msg.lower() for x in ("api key not valid", "api_key_invalid", "api key expired", "401")):
-                self.answered.emit(f"{nome}, o Google recusou a chave da inteligência artificial. Confere no menu, em Configurar IA.")
+                emit(f"{nome}, o Google recusou a chave da inteligência artificial. Confere no menu, em Configurar IA.")
             elif re.search(r"HTTP (\d+)", msg):
                 cod = re.search(r"HTTP (\d+)", msg).group(1)
-                self.answered.emit(f"Desculpa, {nome}, a inteligência artificial deu um erro, código {cod}. Tenta de novo?")
+                emit(f"Desculpa, {nome}, a inteligência artificial deu um erro, código {cod}. Tenta de novo?")
             else:
                 motivo = "demorou demais" if "timed out" in msg.lower() or "timeout" in msg.lower() else "sem conexão com a IA"
-                self.answered.emit(f"Desculpa, {nome}, não consegui responder agora: {motivo}. Tenta de novo?")
+                emit(f"Desculpa, {nome}, não consegui responder agora: {motivo}. Tenta de novo?")
 
 
 # ----------------------------------------------------------------------------
@@ -688,8 +788,11 @@ class AIWorker(QObject):
 # estilo: (voz online, tom, velocidade, efeito, aceleracao online, aceleracao da voz do Windows)
 # Menino: voz masculina com a voz "encolhida" (aceleracao) -> timbre de crianca, e metal bem leve.
 VOZ_ESTILOS = {
-    "menino": ("pt-BR-AntonioNeural", "+24Hz", "-16%", None, 1.32, 1.3),   # menino pequeno, animado
-    "normal": ("pt-BR-AntonioNeural", "+0Hz", "+4%", None, 1.0, 1.0),
+    # suave: voz neural bem natural e calma, sem nenhum efeito (padrao a partir da v1.10)
+    "suave": ("pt-BR-ThalitaMultilingualNeural", "+0Hz", "-4%", None, 1.0, 1.0),
+    # menino: mais leve que antes (sem o efeito "esquilo"), timbre jovem e tranquilo
+    "menino": ("pt-BR-AntonioNeural", "+12Hz", "-8%", None, 1.12, 1.12),
+    "normal": ("pt-BR-AntonioNeural", "+0Hz", "-2%", None, 1.0, 1.0),
     # guerreiro: voz grave e encorpada (aceleracao < 1 deixa o timbre mais grosso), firme e intensa
     "guerreiro": ("pt-BR-AntonioNeural", "-16Hz", "+14%", None, 0.88, 0.88),
 }
@@ -818,7 +921,7 @@ class Voice(QObject):
         threading.Thread(target=run, daemon=True).start()
 
     def busy(self):
-        return self.talking or self.pending or (time.monotonic() - self.last_end) < 0.7
+        return self.talking or self.pending or (time.monotonic() - self.last_end) < 0.5
 
     def _set_talking(self, v):
         if self.talking != v:
@@ -847,6 +950,76 @@ class Voice(QObject):
         self.pending = True
         threading.Thread(target=self._generate, args=(rid, text), daemon=True).start()
 
+    # ---------- fala em sequencia (enquanto a IA ainda esta respondendo) ----------
+    def can_stream(self):
+        return self.player == "sd" and not self.cfg.get("mudo") and self.cfg.get("efeito_voz") != "bravus_voice"
+
+    def stream_begin(self):
+        self.stop()
+        rid = self.req
+        self.pending = True
+        self._last_text = ""
+        import queue
+        tq = queue.Queue()
+        self._stream = (rid, tq)
+        threading.Thread(target=self._stream_gen, args=(rid, tq), daemon=True).start()
+
+    def stream_feed(self, text):
+        st = getattr(self, "_stream", None)
+        if st and st[0] == self.req and text.strip():
+            self._last_text = (self._last_text + " " + text).strip() if self._last_text else text
+            st[1].put(text)
+
+    def stream_end(self):
+        st = getattr(self, "_stream", None)
+        if st:
+            st[1].put(None)
+            self._stream = None
+
+    def _stream_gen(self, rid, tq):
+        import queue
+        self._cleanup()
+        q = queue.Queue()
+        iniciou, i = False, 0
+        try:
+            while rid == self.req:
+                try:
+                    frase = tq.get(timeout=45)
+                except queue.Empty:
+                    break
+                if frase is None:
+                    break
+                path = os.path.join(self.tmpdir, f"fala_{int(time.time() * 1000)}_{rid}_s{i}.mp3"); i += 1
+                self._edge_mp3(frase, path)
+                pcm = self._decode(path)
+                if rid != self.req:
+                    return
+                q.put(pcm)
+                if not iniciou:
+                    iniciou = True
+                    log.info("voz: online (%s), falando enquanto a IA responde", self.cfg.get("efeito_voz"))
+                    self._stop_evt = threading.Event()
+                    threading.Thread(target=self._sd_queue, args=(rid, q, self._stop_evt), daemon=True).start()
+            q.put(None)
+            if not iniciou:
+                self._fallback_state.emit(rid, False)
+        except Exception as e:
+            q.put(None)
+            log.warning("voz online falhou, usando voz do Windows: %s", e)
+            if iniciou:
+                return
+            resto = [frase]
+            while True:      # junta o resto da resposta e fala com a voz do Windows
+                try:
+                    f = tq.get(timeout=45)
+                except queue.Empty:
+                    break
+                if f is None:
+                    break
+                resto.append(f)
+            if rid == self.req:
+                self._speak_offline(rid, " ".join(resto))
+
     def _cleanup(self):
         for f in glob.glob(os.path.join(self.tmpdir, "fala_*")):
             try:
@@ -859,9 +1032,9 @@ class Voice(QObject):
     def _frases(text):
         partes = re.split(r"(?<=[.!?…])\s+", text.strip())
         out, buf = [], ""
-        for p in partes:            # junta frases muito curtas para soar natural
+        for p in partes:            # junta frases muito curtas; a 1a sai logo para comecar a falar rapido
             buf = (buf + " " + p).strip()
-            if len(buf) > 25 or p is partes[-1]:
+            if len(buf) > (10 if not out else 25) or p is partes[-1]:
                 out.append(buf); buf = ""
         if buf:
             out.append(buf)
@@ -872,16 +1045,23 @@ class Voice(QObject):
         import edge_tts
         voz, tom, vel = VOZ_ESTILOS.get(self.cfg.get("efeito_voz", "menino"), VOZ_ESTILOS["menino"])[:3]
 
+        reserva = {"pt-BR-ThalitaMultilingualNeural": "pt-BR-FranciscaNeural"}
+
         async def go():
             ultimo = None
-            for v in dict.fromkeys([getattr(self, "_voz_ok", voz), voz, "pt-BR-AntonioNeural"]):
+            ruins = getattr(self, "_voz_ruim", set())
+            ordem = [voz, reserva.get(voz), "pt-BR-AntonioNeural"]
+            ordem = [v for v in ordem if v and v not in ruins] + [v for v in ordem if v and v in ruins]
+            for v in dict.fromkeys(ordem):
                 try:
                     await edge_tts.Communicate(text, v, rate=vel, pitch=tom).save(path)
                     if os.path.getsize(path) > 0:
-                        self._voz_ok = v
                         return
                 except Exception as e:
                     ultimo = e
+                    if v == voz:
+                        self._voz_ruim = ruins | {v}
+                        log.warning("voz %s indisponivel, usando reserva: %s", v, e)
             raise ultimo or RuntimeError("sem audio")
         asyncio.run(go())
 
@@ -1189,7 +1369,7 @@ class Listener(QObject):
                     silence = 0; voiced += 1
                 else:
                     silence += 1
-                if silence > 16 or len(frames) > 400:
+                if silence > 12 or len(frames) > 400:
                     break
         if voiced < 8:
             return None
@@ -2017,6 +2197,8 @@ class RobotWindow(QWidget):
         self.brain = Brain(cfg)
         self.ai = AIWorker(cfg)
         self.ai.answered.connect(self.on_ai)
+        self.ai.delta.connect(self.on_ai_delta)
+        self.ai_req, self.ai_buf, self.ai_falando, self.ai_dito = 0, "", False, ""
         self.voice = Voice(cfg)
         self.voice.talking_changed.connect(self.on_talking)
         self.listener = Listener(cfg, self.voice.busy)
@@ -2144,7 +2326,7 @@ class RobotWindow(QWidget):
             self.bubble_until = min(self.bubble_until, self.m.t + 2.5) if self.bubble_kind == "say" else self.bubble_until
             if self.listen_after_speech:
                 self.listen_after_speech = False
-                QTimer.singleShot(400, self.start_listening)
+                QTimer.singleShot(250, self.start_listening)
 
     # ---------- acoes e expressoes ----------
     DUR = {"clock": 10.0, "scratch": 6.0, "think": 7.0, "wave": 4.0, "present": 3.0, "water": 6.0,
@@ -2351,7 +2533,7 @@ class RobotWindow(QWidget):
         else:
             msg = f"{saud}, {self.nome}! Que bom te ver. Estou aqui se precisar."
         if "--reiniciar" in sys.argv:
-            msg = f"Pronto, {self.nome}! Fui atualizado para a versão {VERSAO}. Essa é minha voz de robô menino!"
+            msg = f"Pronto, {self.nome}! Fui atualizado para a versão {VERSAO}. Agora respondo mais rápido e com essa voz mais suave. Gostou?"
         if saud == "Bom dia":
             self.cfg["ultima_saudacao"] = now.date().isoformat()
         save_config(self.cfg)
@@ -2493,7 +2675,9 @@ class RobotWindow(QWidget):
                 self.bubble_kind = "thinking"
                 self.do_action("think")
                 self.action_until = self.m.t + 40
-                self.ai.ask(text)
+                self.voice.stop()
+                self.ai_buf, self.ai_falando, self.ai_dito = "", False, ""
+                self.ai_req = self.ai.ask(text)
             else:
                 self.say(random.choice([
                     f"Ainda não sei responder isso, {self.nome}. Clique em mim com o botão direito, em Configurar IA, e eu passo a responder tudo!",
@@ -2552,8 +2736,58 @@ class RobotWindow(QWidget):
             log.warning("comando falhou %s: %s", c, e)
             self.show_status(f"Não consegui fazer isso: {e}", 5)
 
-    def on_ai(self, text):
+    MARCA = r"\[(SITE|PESQUISAR|YOUTUBE):[^\]]*\]"
+
+    def on_ai_delta(self, rid, t):
+        """Chegou um pedaco da resposta: cada frase completa ja vai para a voz (resposta bem mais rapida)."""
+        if rid != self.ai_req or not self.voice.can_stream():
+            return
+        self.ai_buf += t
+        while True:
+            buf = re.sub(self.MARCA, " ", self.ai_buf, flags=re.I)
+            if "[" in buf:                     # marcacao [SITE:...] ainda chegando: espera fechar
+                buf = buf[:buf.index("[")]
+            m = None
+            for mm in re.finditer(r"[.!?…:;]+[\s\n]+|\n+", buf):
+                if len(buf[:mm.end()].strip()) >= (8 if not self.ai_falando else 18):
+                    m = mm; break
+            if not m:
+                return
+            frase = buf[:m.end()].strip()
+            # tira do buffer o que ja foi falado (mantendo o que vem depois)
+            corte = self._pos_no_original(self.ai_buf, m.end())
+            self.ai_buf = self.ai_buf[corte:]
+            self._falar_parte(frase)
+
+    def _pos_no_original(self, orig, n):
+        """Posicao no texto original que corresponde a n caracteres do texto sem as marcacoes."""
+        limpo, pos = 0, 0
+        for mk in re.finditer(self.MARCA, orig, flags=re.I):
+            trecho = mk.start() - pos
+            if limpo + trecho >= n:
+                return pos + (n - limpo)
+            limpo += trecho + 1; pos = mk.end()
+        return pos + (n - limpo)
+
+    def _falar_parte(self, frase):
+        frase = frase.strip()
+        if not frase:
+            return
+        if not self.ai_falando:
+            self.ai_falando = True
+            self.voice.stream_begin()
+            self.action = None
+            self.bubble_kind = "say"
+            self.do_action("present")
+        self.voice.stream_feed(frase)
+        self.ai_dito = (self.ai_dito + " " + frase).strip()
+        self.bubble_text = self.ai_dito
+        self.bubble_until = self.m.t + max(4.0, len(self.ai_dito) * 0.075)
+
+    def on_ai(self, rid, text):
         import urllib.parse
+        if rid != self.ai_req:
+            return
         for tipo, valor in re.findall(r"\[(SITE|PESQUISAR|YOUTUBE):\s*([^\]]+)\]", text, re.I):
             tipo, valor = tipo.upper(), valor.strip()
             if tipo == "SITE" and re.match(r"https?://", valor):
@@ -2564,6 +2798,15 @@ class RobotWindow(QWidget):
                 url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(valor)
             QTimer.singleShot(900, lambda u=url: webbrowser.open(u))
         text = re.sub(r"\[(SITE|PESQUISAR|YOUTUBE):[^\]]*\]", "", text, flags=re.I).strip()
+        if self.ai_falando:       # ja esta falando em sequencia: manda o final e encerra
+            resto = re.sub(self.MARCA, " ", self.ai_buf, flags=re.I)
+            resto = resto.split("[")[0].strip()
+            if resto:
+                self._falar_parte(resto)
+            self.voice.stream_end()
+            self.ai_falando, self.ai_buf = False, ""
+            self.say(text, None, speak=False)
+            return
         self.action = None
         self.bubble_kind = "say"
         self.say(text, "talk" if len(text) > 80 else "present")
@@ -2647,7 +2890,7 @@ class RobotWindow(QWidget):
         mic.addSeparator()
         self.mic_menu(mic)
         vz = mn.addMenu("🔊  Voz")
-        opcoes = [("Robô menino", "menino"), ("Guerreiro", "guerreiro"), ("Natural", "normal")]
+        opcoes = [("Suave (nova)", "suave"), ("Robô menino", "menino"), ("Natural", "normal"), ("Guerreiro", "guerreiro")]
         if self.cfg.get("bravus_voice_url"):
             opcoes.append(("BRAVUS VOICE (voz original)", "bravus_voice"))
         for label, v in opcoes:
@@ -2705,7 +2948,8 @@ class RobotWindow(QWidget):
 
     def set_voice(self, v):
         self.cfg["efeito_voz"] = v; save_config(self.cfg)
-        self.say({"menino": f"Oi, {self.nome}! Essa é minha voz de robô menino. Gostou?",
+        self.say({"suave": f"Oi, {self.nome}. Essa é a minha voz suave. Ficou mais tranquila, né?",
+                  "menino": f"Oi, {self.nome}! Essa é minha voz de robô menino. Gostou?",
                   "guerreiro": f"Voz de guerreiro ativada, {self.nome}. Hoje ninguém nos segura!",
                   "bravus_voice": f"Voz do Bravus Voice ativada, {self.nome}.",
                   "normal": f"Voz natural ativada, {self.nome}."}[v], "happy")
@@ -2953,6 +3197,8 @@ def main():
     cfg = load_config()
     if (cfg.get("efeito_voz") not in VOZ_ESTILOS and cfg.get("efeito_voz") != "bravus_voice") or not cfg.get("voz_menino_v2"):
         cfg["efeito_voz"] = "menino"; cfg["voz_menino_v2"] = True
+    if not cfg.get("voz_suave_v1"):      # v1.10: voz suave vira a padrao (da pra trocar no menu Voz)
+        cfg["efeito_voz"] = "suave"; cfg["voz_suave_v1"] = True
     save_config(cfg)
     w = RobotWindow(cfg)
     w.show()

@@ -1,6 +1,6 @@
 {
-  "versao": "1.9.2",
-  "notas": "Movimentos maiores e mais longos a cada minuto; novos: dancar, pular e olhar em volta.",
+  "versao": "1.10.0",
+  "notas": "Responde bem mais rapido (comeca a falar enquanto a IA ainda pensa), conversa mais natural e nova voz suave como padrao.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
