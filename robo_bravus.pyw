@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.12.0"
+VERSAO = "1.13.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -531,6 +531,101 @@ def http_json(url, body=None, headers=None, timeout=40):
         return out
 
 
+# Conexao com a IA que fica aberta: economiza o "aperto de mao" seguro (TLS) a cada pergunta
+_CONEXOES, _CONEXOES_LOCK = {}, threading.Lock()
+
+
+def _sem_proxy():
+    try:
+        import urllib.request
+        return not urllib.request.getproxies().get("https")
+    except Exception:
+        return False
+
+
+def _conexao(host, timeout):
+    import http.client, ssl
+    with _CONEXOES_LOCK:
+        c = _CONEXOES.pop(host, None)
+    if c is None:
+        c = http.client.HTTPSConnection(host, timeout=timeout, context=ssl.create_default_context())
+    c.timeout = timeout
+    if c.sock is not None:
+        c.sock.settimeout(timeout)
+    return c
+
+
+def _devolve(host, c):
+    with _CONEXOES_LOCK:
+        if host in _CONEXOES:
+            c.close()
+        else:
+            _CONEXOES[host] = c
+
+
+def aquecer_ia(cfg):
+    """Abre a conexao com a IA antes da pergunta chegar (chamado quando ele diz 'Bravus')."""
+    if cfg.get("ia_chave_gemini", "").strip():
+        host = "generativelanguage.googleapis.com"
+    elif cfg.get("ia_chave_anthropic", "").strip():
+        host = "api.anthropic.com"
+    else:
+        return
+    if not _sem_proxy():
+        return
+
+    def run():
+        try:
+            c = _conexao(host, 10)
+            if c.sock is None:
+                t0 = time.monotonic()
+                c.connect()
+                log.info("IA: conexao aberta em %.2fs", time.monotonic() - t0)
+            _devolve(host, c)
+        except Exception as e:
+            log.info("IA: nao deu pra abrir a conexao antes: %s", e)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _sse_conexao(url, data, headers, timeout):
+    """Faz o pedido usando a conexao ja aberta (ou abre uma). Devolve as linhas da resposta."""
+    import urllib.parse, http.client
+    u = urllib.parse.urlsplit(url)
+    host, path = u.hostname, u.path + ("?" + u.query if u.query else "")
+    for tentativa in (1, 2):
+        c = _conexao(host, timeout)
+        reaproveitada = c.sock is not None
+        try:
+            c.request("POST", path, body=data, headers=headers)
+            r = c.getresponse()
+            break
+        except (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError,
+                http.client.CannotSendRequest, http.client.ResponseNotReady):
+            c.close()
+            if tentativa == 2 or not reaproveitada:
+                raise
+    if r.status >= 400:
+        corpo = r.read().decode("utf-8", "ignore")
+        _devolve(host, c)
+        raise RuntimeError(f"HTTP {r.status}: {corpo[:300]}")
+
+    def linhas():
+        terminou = False
+        try:
+            while True:
+                ln = r.readline()
+                if not ln:
+                    break
+                yield ln
+            terminou = True
+        finally:
+            if terminou and not r.will_close:
+                _devolve(host, c)     # resposta lida ate o fim: a conexao fica pronta para a proxima
+            else:
+                c.close()
+    return linhas()
+
+
 def http_sse(url, body, headers=None, timeout=25):
     """POST JSON e devolve os eventos SSE (data: {...}) conforme chegam -> o robo fala antes da IA terminar.
     O 1o evento ja vem lido aqui dentro, assim erros HTTP aparecem na hora (para as novas tentativas)."""
@@ -558,6 +653,13 @@ def http_sse(url, body, headers=None, timeout=25):
             yield from gen
         return tudo()
 
+    if _sem_proxy():
+        try:
+            return com_primeiro(eventos(_sse_conexao(url, data, headers, timeout)))
+        except RuntimeError:
+            raise                      # erro da IA (chave, limite...): o tratamento normal cuida
+        except Exception as e:
+            log.info("conexao direta falhou (%s); tentando do jeito normal", e)
     try:
         req = urllib.request.Request(url, data=data, headers=headers)
         r = urllib.request.urlopen(req, timeout=timeout)
@@ -1985,7 +2087,7 @@ class SpriteRobot(RobotModel):
             "talk": (math.sin(t * 2) * 3, math.sin(t * 2.7) * 8, math.sin(t * 3.1 + 1) * 8, 0, 0),
             "point": (4, 24, 0, 3, 0),
             "stretch": (-6 + math.sin(t * 4) * 3, -48, 48, math.sin(t * 2) * 4, 10),
-            "listen": (8, -42, 0, 4, 0),
+            "listen": (25 + math.sin(t * 2.2) * 1.5, -40 + math.sin(t * 3.0) * 2, 0, 5, 0),   # mao em concha na orelha
             "water": (3, -22 + math.sin(t * 2.2) * 8, 0, 0, 0),
             "sleep": (11 + math.sin(t * 0.8) * 1.5, 22, -22, 0, 0),
             "dance": (math.sin(t * 6) * 10, math.sin(t * 6) * 28, math.sin(t * 6 + math.pi) * 28,
@@ -2212,6 +2314,7 @@ class RobotWindow(QWidget):
         self.conversa_ate, self.ai_esperando = 0.0, False
         self.conversa_timer = QTimer(self); self.conversa_timer.timeout.connect(self.check_conversa)
         self.conversa_timer.start(1000)
+        QTimer.singleShot(8000, lambda: aquecer_ia(self.cfg))
         self.listener.status.connect(self.on_listen_status)
         self.listener.level.connect(self.on_mic_level)
         self.mic_level = 0.0
@@ -2376,7 +2479,8 @@ class RobotWindow(QWidget):
             self.expr_temp = None
 
         self._cena_tick(t)
-        busy = m.talking or self.listening or self.action or self.sleeping or bool(getattr(self, "cena", None))
+        busy = (m.talking or self.listening or self.action or self.sleeping or bool(getattr(self, "cena", None))
+                or self.em_conversa())
         if self.cfg.get("comportamentos_aleatorios", True) and not busy and t > self.next_idle:
             self.random_behavior()
         if t > self.next_idle + 120:
@@ -2385,7 +2489,7 @@ class RobotWindow(QWidget):
         # pose
         if self.sleeping:
             pose = "sleep"
-        elif self.listening:
+        elif self.listening or self.esperando_fala():
             pose = "listen"
         elif self.action:
             pose = "rest_float" if self.action == "clock" else self.action
@@ -2400,7 +2504,7 @@ class RobotWindow(QWidget):
         # expressao
         if self.sleeping:
             e = "sleep"
-        elif self.listening:
+        elif self.listening or self.esperando_fala():
             e = "listen"
         elif self.expr_temp:
             e = self.expr_temp
@@ -2448,7 +2552,7 @@ class RobotWindow(QWidget):
                 self.next_blink = t + random.uniform(2.0, 5.5)
 
         # olhar
-        if self.sleeping or self.listening:
+        if self.sleeping or self.listening or self.esperando_fala():
             lt = P(0, 0)
         elif self.action in ("think", "scratch"):
             lt = P(5, -5)
@@ -2523,7 +2627,8 @@ class RobotWindow(QWidget):
         cena = getattr(self, "cena", None)
         if not cena:
             return
-        if self.m.talking or self.listening or self.ai_esperando or (self.sleeping and not self._napping_cena()):
+        if (self.m.talking or self.listening or self.ai_esperando or self.em_conversa()
+                or (self.sleeping and not self._napping_cena())):
             self._parar_cena(); return
         if t < self.cena_passo_ate:
             return
@@ -2686,9 +2791,17 @@ class RobotWindow(QWidget):
     def em_conversa(self):
         return time.monotonic() < self.conversa_ate
 
+    def esperando_fala(self):
+        """Em conversa, esperando ele falar: fica com a mao na orelha."""
+        return (self.em_conversa() and not self.m.talking and not self.ai_esperando
+                and not self.action and not self.sleeping)
+
     def abrir_conversa(self):
+        if not self.em_conversa():
+            aquecer_ia(self.cfg)       # ja abre a conexao com a IA enquanto ele fala: resposta mais rapida
         self.conversa_ate = max(self.conversa_ate, time.monotonic() + self.CONVERSA_SEG)
         self.listener.conversa = True
+        self.action = None
 
     def fechar_conversa(self):
         self.conversa_ate = 0.0
@@ -2859,8 +2972,12 @@ class RobotWindow(QWidget):
             if "[" in buf:                     # marcacao [SITE:...] ainda chegando: espera fechar
                 buf = buf[:buf.index("[")]
             m = None
-            for mm in re.finditer(r"[.!?…:;]+[\s\n]+|\n+", buf):
-                if len(buf[:mm.end()].strip()) >= (8 if not self.ai_falando else 18):
+            for mm in re.finditer(r"[.!?…:;]+[\s\n]+|\n+|,\s+", buf):
+                tam = len(buf[:mm.end()].strip())
+                if mm.group().startswith(","):     # virgula: so corta a 1a fala, e se ja tiver um bom pedaco
+                    if self.ai_falando or tam < 22:
+                        continue
+                if tam >= (8 if not self.ai_falando else 18):
                     m = mm; break
             if not m:
                 return

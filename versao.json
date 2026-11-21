@@ -1,6 +1,6 @@
 {
-  "versao": "1.12.0",
-  "notas": "Movimentos em cenas: a cada minuto uma acao principal que emenda nas outras; as 9 acoes se revezam.",
+  "versao": "1.13.0",
+  "notas": "Mao na orelha quando voce diz Bravus; pensa mais rapido (conexao com a IA ja aberta e comeca a falar na primeira virgula).",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
