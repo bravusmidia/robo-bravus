@@ -12,7 +12,7 @@ import sys, os, re, json, math, time, random, threading, tempfile, datetime
 import logging, unicodedata, webbrowser, subprocess, glob, socket, collections
 from array import array
 
-VERSAO = "1.11.0"
+VERSAO = "1.12.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "robo_bravus.log")
@@ -2375,7 +2375,8 @@ class RobotWindow(QWidget):
         if self.expr_temp and t > self.expr_until:
             self.expr_temp = None
 
-        busy = m.talking or self.listening or self.action or self.sleeping
+        self._cena_tick(t)
+        busy = m.talking or self.listening or self.action or self.sleeping or bool(getattr(self, "cena", None))
         if self.cfg.get("comportamentos_aleatorios", True) and not busy and t > self.next_idle:
             self.random_behavior()
         if t > self.next_idle + 120:
@@ -2485,9 +2486,23 @@ class RobotWindow(QWidget):
             self.update()
 
     ROTINA = ["dance", "scratch", "think", "wave", "jump", "stretch", "sit", "look", "nap"]
+    # Cada minuto tem uma acao principal que se emenda nas outras, como uma pequena historia.
+    # passo: (acao, segundos).  sit/stand = senta/levanta, sleep = cochila, wake = acorda, happy = sorri
+    CENAS = {
+        "think":   [("think", 8), ("scratch", 5), ("happy", 2), ("point", 2.5), ("jump", 3), ("look", 5)],
+        "scratch": [("look", 4), ("scratch", 6), ("think", 7), ("happy", 2), ("point", 2.5)],
+        "dance":   [("look", 3), ("happy", 1.5), ("dance", 10), ("jump", 3), ("stretch", 4), ("happy", 2)],
+        "wave":    [("look", 4), ("wave", 4), ("present", 3.5), ("happy", 2), ("point", 2.5)],
+        "jump":    [("think", 4), ("happy", 1.5), ("jump", 3.5), ("dance", 6), ("jump", 3), ("happy", 2)],
+        "stretch": [("stretch", 5), ("sit", 2), ("look", 7), ("think", 6), ("scratch", 4), ("stand", 2)],
+        "sit":     [("sit", 2), ("look", 6), ("think", 7), ("happy", 2), ("wave", 3), ("stand", 2)],
+        "look":    [("look", 7), ("point", 2.5), ("think", 6), ("scratch", 4), ("happy", 2)],
+        "nap":     [("stretch", 4), ("sit", 2), ("sleep", 30), ("wake", 2), ("stretch", 5), ("stand", 2)],
+    }
+    PAUSA = 0.7   # respiro entre um movimento e outro: os bracos e a cabeca vao suavemente de um ao outro
 
     def random_behavior(self):
-        """A cada 1 minuto faz uma das acoes do menu, em ordem embaralhada (sem repetir seguido)."""
+        """A cada 1 minuto comeca uma cena: as 9 acoes se revezam (todas passam antes de repetir)."""
         t = self.m.t
         if not getattr(self, "_fila", None):
             fila = self.ROTINA[:]
@@ -2497,17 +2512,46 @@ class RobotWindow(QWidget):
             self._fila = fila
         choice = self._fila.pop(0)
         self._ultima = choice
-        if choice == "sit":
-            self.base_sit = not self.base_sit          # senta ou levanta/flutua
-            self.set_expr("happy", 1.5)
-        elif choice == "nap":
-            self.go_sleep()                             # cochilo rapido
-            self._napping = True
-            QTimer.singleShot(9000, self.end_nap)
-        else:
-            self.do_action(choice)
-        log.info("movimento: %s", choice)
+        self.cena = list(self.CENAS[choice])
+        self.cena_passo_ate = 0.0
+        self._cena_sentou = False
+        log.info("movimento (cena): %s -> %s", choice, ", ".join(a for a, _ in self.cena))
         self.next_idle = t + 60
+
+    def _cena_tick(self, t):
+        """Avanca a cena atual: quando um movimento termina, o proximo comeca logo em seguida."""
+        cena = getattr(self, "cena", None)
+        if not cena:
+            return
+        if self.m.talking or self.listening or self.ai_esperando or (self.sleeping and not self._napping_cena()):
+            self._parar_cena(); return
+        if t < self.cena_passo_ate:
+            return
+        a, dur = cena.pop(0)
+        if a == "sit":
+            self.base_sit = True; self._cena_sentou = True; self.set_expr("happy", 1.5)
+        elif a == "stand":
+            self.base_sit = False; self._cena_sentou = False
+        elif a == "sleep":
+            self.sleeping = True; self.base_sit = True; self._napping = True
+        elif a == "wake":
+            self.sleeping = False; self._napping = False; self.set_expr("excited", 2)
+        elif a == "happy":
+            self.set_expr("happy", dur + 0.5)
+        else:
+            self.action, self.action_until = a, t + dur
+        self.cena_passo_ate = t + dur + self.PAUSA
+
+    def _napping_cena(self):
+        return getattr(self, "_napping", False)
+
+    def _parar_cena(self):
+        """Ele foi chamado: interrompe a cena e fica pronto pra conversar."""
+        self.cena = []
+        if getattr(self, "_napping", False):
+            self.sleeping = False; self._napping = False
+        if getattr(self, "_cena_sentou", False):
+            self.base_sit = False; self._cena_sentou = False
 
     def end_nap(self):
         if getattr(self, "_napping", False) and self.sleeping:
@@ -3034,6 +3078,8 @@ class RobotWindow(QWidget):
     def toggle_random(self):
         self.cfg["comportamentos_aleatorios"] = not self.cfg.get("comportamentos_aleatorios", True)
         save_config(self.cfg)
+        if not self.cfg["comportamentos_aleatorios"]:
+            self._parar_cena()
 
     def set_size(self, v):
         self.cfg["tamanho"] = v; self.apply_size()

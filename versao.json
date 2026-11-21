@@ -1,6 +1,6 @@
 {
-  "versao": "1.11.0",
-  "notas": "Modo conversa: diga Bravus e ele fica atento; diga obrigado, Bravus e ele para de escutar. Escuta melhor e atende mais rapido.",
+  "versao": "1.12.0",
+  "notas": "Movimentos em cenas: a cada minuto uma acao principal que emenda nas outras; as 9 acoes se revezam.",
   "arquivos": [
     "INICIAR.bat",
     "INSTALAR.bat",
